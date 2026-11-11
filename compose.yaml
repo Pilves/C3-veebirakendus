@@ -1,0 +1,29 @@
+# Start with: docker compose up --build
+# Then open http://127.0.0.1:3000 (or the port given in PORT).
+services:
+  app:
+    build: .
+    ports:
+      # Published on the loopback address only: the app has no login, so it must not be
+      # reachable from the network. PORT picks another host port if 3000 is taken:
+      #   PORT=3100 docker compose up --build
+      - "127.0.0.1:${PORT:-3000}:3000"
+    # The app writes nothing, so the container gets a read-only file system, no Linux
+    # capabilities and no way to gain privileges.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # A small init process as PID 1, so Ctrl-C stops the container at once instead of
+    # after Docker's ten-second kill timeout (Node as PID 1 ignores SIGTERM by default).
+    init: true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/cases').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3

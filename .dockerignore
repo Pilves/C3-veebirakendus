@@ -1,0 +1,10 @@
+# Only package files, src, public and data are copied; this keeps the rest out of the
+# build context as well.
+.git
+node_modules
+scripts
+**/*.test.ts
+*.md
+Dockerfile
+compose.yaml
+.dockerignore
