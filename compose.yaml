@@ -18,6 +18,9 @@ services:
     # A small init process as PID 1, so Ctrl-C stops the container at once instead of
     # after Docker's ten-second kill timeout (Node as PID 1 ignores SIGTERM by default).
     init: true
+    # Ceilings, so a bug or a hostile request cannot exhaust the analyst's machine.
+    mem_limit: 256m
+    pids_limit: 100
     healthcheck:
       test:
         - CMD

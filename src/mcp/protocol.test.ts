@@ -11,7 +11,6 @@ import {
   errorResponse,
   isAllowedOrigin,
   listToolsResult,
-  parseAllowedOrigins,
   readMessage,
   readableId,
   resultResponse,
@@ -58,7 +57,7 @@ function request(overrides: Partial<Message> = {}): Message {
 
 describe("isAllowedOrigin", () => {
   test("no Origin header is allowed: the caller is not a browser page", () => {
-    assert.equal(isAllowedOrigin(undefined, []), true);
+    assert.equal(isAllowedOrigin(undefined), true);
   });
 
   test("this machine is allowed on any port and scheme", () => {
@@ -69,7 +68,7 @@ describe("isAllowedOrigin", () => {
       "http://127.0.0.1:5173",
       "http://[::1]:3000",
     ]) {
-      assert.equal(isAllowedOrigin(origin, []), true, origin);
+      assert.equal(isAllowedOrigin(origin), true, origin);
     }
   });
 
@@ -89,31 +88,8 @@ describe("isAllowedOrigin", () => {
       "http://localhost\\.evil.example",
       "HTTP://LOCALHOST:3000",
     ]) {
-      assert.equal(isAllowedOrigin(origin, []), false, origin);
+      assert.equal(isAllowedOrigin(origin), false, origin);
     }
-  });
-
-  test("a listed origin is allowed only when it is exactly the same text", () => {
-    const allowed = ["https://tools.example"];
-    assert.equal(isAllowedOrigin("https://tools.example", allowed), true);
-    assert.equal(isAllowedOrigin("https://tools.example:8443", allowed), false);
-    assert.equal(isAllowedOrigin("http://tools.example", allowed), false);
-    assert.equal(isAllowedOrigin("https://tools.example.evil.example", allowed), false);
-  });
-});
-
-describe("parseAllowedOrigins", () => {
-  test("unset or empty means no extra origins", () => {
-    assert.deepEqual(parseAllowedOrigins(undefined), []);
-    assert.deepEqual(parseAllowedOrigins(""), []);
-    assert.deepEqual(parseAllowedOrigins(" , "), []);
-  });
-
-  test("splits on commas and trims", () => {
-    assert.deepEqual(parseAllowedOrigins("https://a.example, https://b.example:8443 ,"), [
-      "https://a.example",
-      "https://b.example:8443",
-    ]);
   });
 });
 
@@ -123,14 +99,14 @@ describe("parseAllowedOrigins", () => {
 
 describe("checkBeforeBody", () => {
   test("a JSON POST without Origin passes", () => {
-    checkBeforeBody("POST", headers(), []);
-    checkBeforeBody("POST", headers({ "content-type": "application/json; charset=utf-8" }), []);
-    checkBeforeBody("POST", headers({ "content-type": "Application/JSON" }), []);
+    checkBeforeBody("POST", headers());
+    checkBeforeBody("POST", headers({ "content-type": "application/json; charset=utf-8" }));
+    checkBeforeBody("POST", headers({ "content-type": "Application/JSON" }));
   });
 
   test("step 1: a foreign Origin is 403", () => {
     const error = rejected(
-      () => checkBeforeBody("POST", headers({ origin: "https://evil.example" }), []),
+      () => checkBeforeBody("POST", headers({ origin: "https://evil.example" })),
       403,
       -32600,
     );
@@ -138,19 +114,19 @@ describe("checkBeforeBody", () => {
   });
 
   test("step 1 comes before step 2: a foreign Origin on GET is 403, not 405", () => {
-    rejected(() => checkBeforeBody("GET", { origin: "https://evil.example" }, []), 403, -32600);
+    rejected(() => checkBeforeBody("GET", { origin: "https://evil.example" }), 403, -32600);
   });
 
   test("step 2: every method but POST is 405", () => {
     for (const method of ["GET", "DELETE", "PUT", "PATCH", "OPTIONS", "HEAD"]) {
-      rejected(() => checkBeforeBody(method, headers(), []), 405, -32600);
+      rejected(() => checkBeforeBody(method, headers()), 405, -32600);
     }
   });
 
   test("step 3: a missing or different Content-Type is 415", () => {
     for (const contentType of [undefined, "text/plain", "application/jsonx", "text/json"]) {
       rejected(
-        () => checkBeforeBody("POST", headers({ "content-type": contentType }), []),
+        () => checkBeforeBody("POST", headers({ "content-type": contentType })),
         415,
         -32600,
       );
@@ -211,6 +187,12 @@ describe("readMessage", () => {
     assert.equal(readMessage({ jsonrpc: "2.0", id: "abc", method: "x" }).id, "abc");
   });
 
+  test("an integer id is fine, zero and negative included", () => {
+    for (const id of [0, -1, 7, Number.MAX_SAFE_INTEGER]) {
+      assert.equal(readMessage({ jsonrpc: "2.0", id, method: "x" }).id, id);
+    }
+  });
+
   test("step 6: without an id it is a notification", () => {
     const message = readMessage({ jsonrpc: "2.0", method: "notifications/cancelled" });
     assert.equal(message.id, undefined);
@@ -238,8 +220,9 @@ describe("readMessage", () => {
     rejected(() => readMessage({ jsonrpc: "2.0", id: 1, method: 5 }), 400, -32600);
   });
 
-  test("step 5: id must be a string or number, and not null", () => {
-    for (const id of [null, true, {}, [1]]) {
+  test("step 5: id must be a string or an integer, and not null", () => {
+    // Infinity is what JSON.parse makes of 1e400; 2 ** 53 is past the safe integers.
+    for (const id of [null, true, {}, [1], 1.5, Infinity, -Infinity, NaN, 2 ** 53]) {
       rejected(() => readMessage({ jsonrpc: "2.0", id, method: "tools/list" }), 400, -32600);
     }
   });
@@ -252,7 +235,7 @@ describe("readMessage", () => {
 });
 
 describe("readableId", () => {
-  test("returns a string or number id", () => {
+  test("returns a string or integer id", () => {
     assert.equal(readableId({ id: 5 }), 5);
     assert.equal(readableId({ id: "a" }), "a");
     assert.equal(readableId({ jsonrpc: "1.0", id: 44 }), 44);
@@ -261,6 +244,9 @@ describe("readableId", () => {
   test("returns undefined when there is no usable id", () => {
     for (const body of [undefined, null, [], [{ id: 1 }], "id", {}, { id: null }, { id: {} }]) {
       assert.equal(readableId(body), undefined);
+    }
+    for (const id of [1.5, Infinity, NaN, 2 ** 53]) {
+      assert.equal(readableId({ id }), undefined, String(id));
     }
   });
 });

@@ -9,6 +9,8 @@
 //
 // THE ORDER OF THE CHECKS. The spec defines none, so it is fixed here, cheapest and most
 // general first. Each step answers with the HTTP status and JSON-RPC code shown.
+// (Before all of them the server refuses a foreign Host header for the whole app, with
+// 403 and a plain JSON error: see server.ts.)
 //    1. Origin present and not allowed                        403  -32600  (no id)
 //    2. HTTP method is not POST                               405  -32600  (no id)
 //    3. Content-Type is not application/json                  415  -32600  (no id)
@@ -91,16 +93,15 @@ function dispatch(tools: Tools, headers: Headers, message: Message): JsonObject 
   }
 }
 
-// Mounted at /mcp by the server. `allowedOrigins` are extra exact origins that may call
-// the endpoint from a browser, besides pages served from this machine.
-export function createMcpRouter(store: Store, search: Search, allowedOrigins: string[]): Router {
+// Mounted at /mcp by the server.
+export function createMcpRouter(store: Store, search: Search): Router {
   const tools = createTools(store, search);
   const router = Router();
 
   // Steps 1-3, for every HTTP method, before any of the body is read.
   const checkHttp: RequestHandler = (request, response, next) => {
     try {
-      checkBeforeBody(request.method, request.headers, allowedOrigins);
+      checkBeforeBody(request.method, request.headers);
       next();
     } catch (error) {
       const failure = asProtocolError(error);
