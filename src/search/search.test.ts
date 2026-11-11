@@ -90,6 +90,14 @@ describe("foldText", () => {
   test("text with nothing to fold maps to itself", () => {
     assert.deepEqual(foldText("abc"), { text: "abc", starts: [0, 1, 2], ends: [1, 2, 3] });
   });
+
+  test("a mark after a character of several folded units extends all of them", () => {
+    // The syllable folds to three code units; the mark after it belongs to all three.
+    const folded = foldText(`한${COMBINING_ACUTE}국`);
+    assert.equal(folded.text.length, 6);
+    assert.deepEqual(folded.starts, [0, 0, 0, 2, 2, 2]);
+    assert.deepEqual(folded.ends, [2, 2, 2, 3, 3, 3]);
+  });
 });
 
 // ======================================================================================
@@ -173,6 +181,18 @@ describe("ranking", () => {
 
     const prefix = search({ query: "suur k" });
     assert.equal(prefix.hits[0]?.tier, 1);
+  });
+
+  test("whitespace inside the entity is collapsed for the comparison too", () => {
+    // Two spaces, a tab and a no-break space: each entity must be an exact match for
+    // its own text, and for the same words typed with single spaces.
+    const entities = ["suur  kala", "suur\tkala", "suur\u00a0kala"];
+    for (const entity of entities) {
+      const spaced = searchOf([{ entity, type: "alias" }]);
+      assert.equal(spaced({ query: entity }).hits[0]?.tier, 0, JSON.stringify(entity));
+      assert.equal(spaced({ query: "suur kala" }).hits[0]?.tier, 0, JSON.stringify(entity));
+      assert.equal(spaced({ query: "suur k" }).hits[0]?.tier, 1, JSON.stringify(entity));
+    }
   });
 
   test("terms in another order still match, but only as tier 2", () => {
@@ -301,6 +321,15 @@ describe("highlight offsets", () => {
     const entity = `a${syllable}b`;
     assert.deepEqual(entitySlices(entity, foldText(syllable).text.slice(0, 1)), [syllable]);
     assert.deepEqual(entitySlices(entity, "b"), ["b"]);
+  });
+
+  test("a mark after such a character stays with it, whichever part matched", () => {
+    const marked = `한${COMBINING_ACUTE}`;
+    const entity = `${marked}국`;
+    // "하" folds to the first two of the three code units that "한" folds to.
+    assert.deepEqual(entitySlices(entity, "하"), [marked]);
+    assert.deepEqual(entitySlices(entity, "한"), [marked]);
+    assert.deepEqual(entitySlices(entity, "국"), ["국"]);
   });
 
   test("offsets in the notes refer to the notes", () => {
@@ -442,6 +471,7 @@ describe("paging", () => {
     assert.equal(result.offset, 0);
   });
 
+  // The callers refuse bad values themselves; these clamps are only the last guard.
   test("limit is kept within 1..200", () => {
     assert.equal(search({ limit: 0 }).limit, 1);
     assert.equal(search({ limit: -3 }).limit, 1);
@@ -451,25 +481,12 @@ describe("paging", () => {
     assert.equal(search({ limit: 1e9 }).limit, 200);
   });
 
-  test("a limit that is not a whole number falls back to 50", () => {
-    for (const limit of [2.5, NaN, Infinity, -Infinity]) {
-      assert.equal(search({ limit }).limit, 50);
-    }
-  });
-
-  test("a bad offset falls back to 0", () => {
-    for (const offset of [-1, -1e9, 1.5, NaN, Infinity, -Infinity]) {
+  test("a negative offset is kept at 0", () => {
+    for (const offset of [-1, -1e9]) {
       const result = search({ offset, limit: 2 });
       assert.equal(result.offset, 0);
       assert.deepEqual(keysOf(result), ["T-5", "T-4"]);
     }
-  });
-
-  test("values of the wrong type from an untyped caller fall back too", () => {
-    const untyped = { limit: "10", offset: null } as unknown as { limit: number; offset: number };
-    const result = search(untyped);
-    assert.equal(result.limit, 50);
-    assert.equal(result.offset, 0);
   });
 });
 
@@ -484,7 +501,6 @@ describe("empty query", () => {
     for (const query of ["", "   ", " \t\n "]) {
       const result = search({ query });
       assert.deepEqual(keysOf(result), ["T-3", "T-2", "T-1"]);
-      assert.equal(result.truncated, false);
       for (const hit of result.hits) {
         assert.equal(hit.tier, 3);
         assert.deepEqual(hit.entityRanges, []);
@@ -540,7 +556,7 @@ describe("hostile queries", () => {
       const result = search({ query, includeDuplicates: true });
       assert.ok(result.total >= 0 && result.total <= 3);
       assert.ok(result.hits.length <= result.total);
-      assert.equal(typeof result.truncated, "boolean");
+      assert.equal("truncated" in result, false);
     }
   });
 
@@ -561,57 +577,43 @@ describe("hostile queries", () => {
   });
 });
 
-describe("query guard", () => {
+// Nothing is cut off: a long query is used whole. The HTTP API and the MCP tool refuse
+// a query over their own limit before it gets here.
+describe("long queries", () => {
   const search = searchOf([
     { entity: "kala", type: "alias" },
     { entity: "abcdefghij", type: "alias" },
     { entity: "a".repeat(250), type: "alias" },
   ]);
 
-  test("a query of exactly 200 characters is used whole", () => {
-    const result = search({ query: "a".repeat(200) });
-    assert.equal(result.truncated, false);
-    assert.deepEqual(keysOf(result), ["T-3"]);
+  test("a query longer than 200 characters is used whole", () => {
+    assert.deepEqual(keysOf(search({ query: "a".repeat(250) })), ["T-3"]);
+    assert.equal(search({ query: "a".repeat(250) }).hits[0]?.tier, 0);
+    // The 201st character counts: T-3 has no "b", so this must not match it.
+    assert.equal(search({ query: "a".repeat(200) + "b" }).total, 0);
   });
 
-  test("everything after 200 characters is ignored, and the result says so", () => {
-    // Whole, this query would not match: T-3 has no "b". Cut to its first 200 it does.
-    const result = search({ query: "a".repeat(200) + "b" });
-    assert.equal(result.truncated, true);
-    assert.deepEqual(keysOf(result), ["T-3"]);
+  test("a term far into the query still has to match", () => {
+    assert.equal(search({ query: "kala" + " ".repeat(200) + "zzz" }).total, 0);
+    assert.deepEqual(keysOf(search({ query: "kala" + " ".repeat(200) + "ala" })), ["T-1"]);
   });
 
-  test("a term that starts after the 200th character is dropped", () => {
-    const result = search({ query: "kala" + " ".repeat(200) + "zzz" });
-    assert.equal(result.truncated, true);
+  test("whitespace around the query is ignored", () => {
+    const result = search({ query: " ".repeat(500) + "kala" + " ".repeat(500) });
     assert.deepEqual(keysOf(result), ["T-1"]);
     assert.equal(result.hits[0]?.tier, 0);
   });
 
-  test("the 200 are counted after trimming", () => {
-    const result = search({ query: " ".repeat(500) + "kala" + " ".repeat(500) });
-    assert.equal(result.truncated, false);
-    assert.deepEqual(keysOf(result), ["T-1"]);
-  });
-
-  test("ten terms are all used", () => {
-    const result = search({ query: "a b c d e f g h i j" });
-    assert.equal(result.truncated, false);
-    assert.deepEqual(keysOf(result), ["T-2"]);
-    assert.equal(search({ query: "a b c d e f g h i zzz" }).total, 0);
-  });
-
-  test("terms after the tenth are ignored, and the result says so", () => {
-    const result = search({ query: "a b c d e f g h i j zzz" });
-    assert.equal(result.truncated, true);
-    assert.deepEqual(keysOf(result), ["T-2"]);
+  test("every term is used, however many there are", () => {
+    assert.deepEqual(keysOf(search({ query: "a b c d e f g h i j" })), ["T-2"]);
+    assert.equal(search({ query: "a b c d e f g h i j zzz" }).total, 0);
   });
 });
 
 describe("createSearch", () => {
   test("no findings give an empty result", () => {
     const result = createSearch([])({ query: "anything" });
-    assert.deepEqual(result, { total: 0, limit: 50, offset: 0, truncated: false, hits: [] });
+    assert.deepEqual(result, { total: 0, limit: 50, offset: 0, hits: [] });
   });
 
   test("hits carry the finding objects that were passed in, unchanged", () => {
@@ -670,7 +672,6 @@ describe("real dataset", () => {
   test("searching an exact entity puts a tier 0 hit for it first", () => {
     for (const finding of picked) {
       const result = search({ query: finding.entity, limit: 200 });
-      assert.equal(result.truncated, false, finding.key);
       const first = result.hits[0];
       assert.ok(first !== undefined, finding.key);
       assert.equal(first.tier, 0, finding.key);

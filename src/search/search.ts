@@ -20,8 +20,8 @@ export type SearchOptions = {
   type?: FindingType;
   caseId?: string;
   includeDuplicates?: boolean; // default false: re-imported copies are hidden
-  limit?: number; // default 50, kept within 1..200
-  offset?: number; // default 0
+  limit?: number; // a whole number; default 50, kept within 1..200
+  offset?: number; // a whole number; default 0
 };
 
 export type SearchHit = {
@@ -35,7 +35,6 @@ export type SearchResult = {
   total: number; // matches before paging
   limit: number; // the values actually used, after clamping
   offset: number;
-  truncated: boolean; // true when part of the query was ignored (too long, too many terms)
   hits: SearchHit[];
 };
 
@@ -71,51 +70,64 @@ export function foldText(original: string): FoldedText {
       starts.push(position);
       ends.push(end);
     }
-    // A character that folds to nothing is a combining mark. It is drawn on the letter
-    // before it, so that letter's range grows to cover it: a highlight must never
-    // separate a letter from its accent.
-    if (folded === "" && ends.length > 0) ends[ends.length - 1] = end;
+    if (folded === "") extendLastCharacter(starts, ends, end);
     text += folded;
     position = end;
   }
   return { text, starts, ends };
 }
 
+// A character that folds to nothing is a combining mark. It is drawn on the character
+// before it, so that character's range grows to cover it: a highlight must never
+// separate a letter from its accent. The character before may have folded to several
+// code units (a Hangul syllable becomes two or three); they all share one `start`, and
+// every one of them gets the new end, so a match on any of them takes the mark along.
+function extendLastCharacter(starts: number[], ends: number[], end: number): void {
+  const start = starts[starts.length - 1];
+  for (let i = ends.length - 1; i >= 0 && starts[i] === start; i--) ends[i] = end;
+}
+
 // ---------- query ----------
 
-// Cost guards: the work per finding grows with the query, and the query is user input.
-const MAX_QUERY_LENGTH = 200; // UTF-16 code units, counted after trimming
-const MAX_TERMS = 10;
-
+// The whole query is used, however long: nothing is cut off silently here. The work per
+// finding grows with the query, so the two edges (HTTP API, MCP tool) refuse a query
+// that is too long before it gets here.
 type ParsedQuery = {
   terms: string[]; // folded, never empty strings
   phrase: string; // the terms joined by single spaces; the ranking compares against it
-  truncated: boolean;
 };
 
+// The words of a folded text. A fixed pattern, not one built from the text. Text made
+// only of whitespace or combining marks gives no words at all.
+function wordsOf(folded: string): string[] {
+  return folded.split(/\s+/).filter((word) => word !== "");
+}
+
+// A query without words counts as an empty query.
 function parseQuery(query: string): ParsedQuery {
-  const trimmed = query.trim();
-  const folded = foldText(trimmed.slice(0, MAX_QUERY_LENGTH)).text;
-  // A fixed pattern, not one built from the query. A query made only of combining marks
-  // folds to "", which the filter removes: it then counts as an empty query.
-  const allTerms = folded.split(/\s+/).filter((term) => term !== "");
-  const terms = allTerms.slice(0, MAX_TERMS);
-  return {
-    terms,
-    phrase: terms.join(" "),
-    truncated: trimmed.length > MAX_QUERY_LENGTH || allTerms.length > MAX_TERMS,
-  };
+  const terms = wordsOf(foldText(query).text);
+  return { terms, phrase: terms.join(" ") };
 }
 
 // ---------- matching and ranking ----------
 
 // A finding with its searchable text folded once, at startup, instead of on every query.
-type Prepared = { finding: Finding; entity: FoldedText; notes: FoldedText };
+type Prepared = {
+  finding: Finding;
+  entity: FoldedText;
+  // The folded entity with every run of whitespace as one space, like the query phrase.
+  // Without it an entity written with two spaces, a tab or a no-break space could never
+  // be an exact match for its own text.
+  entityPhrase: string;
+  notes: FoldedText;
+};
 
 function prepare(finding: Finding): Prepared {
+  const entity = foldText(finding.entity);
   return {
     finding,
-    entity: foldText(finding.entity),
+    entity,
+    entityPhrase: wordsOf(entity.text).join(" "),
     notes: foldText(finding.notes ?? ""),
   };
 }
@@ -133,8 +145,8 @@ function matchesAllTerms(item: Prepared, terms: string[]): boolean {
 function tierOf(item: Prepared, query: ParsedQuery): Tier {
   // Checked first because every string starts with "", which would make browse tier 1.
   if (query.terms.length === 0) return 3;
-  if (item.entity.text === query.phrase) return 0;
-  if (item.entity.text.startsWith(query.phrase)) return 1;
+  if (item.entityPhrase === query.phrase) return 0;
+  if (item.entityPhrase.startsWith(query.phrase)) return 1;
   if (query.terms.some((term) => item.entity.text.includes(term))) return 2;
   return 3;
 }
@@ -205,20 +217,18 @@ function highlightsOf(terms: string[], folded: FoldedText): HighlightRange[] {
 // ---------- paging ----------
 
 const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 200;
+// Exported for the HTTP API, which refuses a larger limit with this number in its message.
+export const MAX_LIMIT = 200;
 
-// The values may come straight from a URL, so anything that is not a whole number
-// (undefined, NaN, Infinity, 2.5) falls back to the default instead of being guessed at.
-function wholeNumberOr(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isInteger(value) ? value : fallback;
-}
-
+// Both callers check their input and pass a whole number or nothing: the HTTP API
+// refuses anything else with 400, the MCP tool with an error result. The clamps below
+// are only a last guard, so a mistake in a caller can never ask for a huge page.
 function limitOf(value: number | undefined): number {
-  return Math.min(MAX_LIMIT, Math.max(1, wholeNumberOr(value, DEFAULT_LIMIT)));
+  return Math.min(MAX_LIMIT, Math.max(1, value ?? DEFAULT_LIMIT));
 }
 
 function offsetOf(value: number | undefined): number {
-  return Math.max(0, wholeNumberOr(value, 0));
+  return Math.max(0, value ?? 0);
 }
 
 // ---------- the search ----------
@@ -251,6 +261,6 @@ export function createSearch(findings: Finding[]): Search {
       entityRanges: highlightsOf(query.terms, item.entity),
       notesRanges: highlightsOf(query.terms, item.notes),
     }));
-    return { total: ranked.length, limit, offset, truncated: query.truncated, hits };
+    return { total: ranked.length, limit, offset, hits };
   };
 }

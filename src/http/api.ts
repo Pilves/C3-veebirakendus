@@ -11,6 +11,7 @@ import { VALID_TYPES } from "../data/normalise.ts";
 import type { Finding, FindingType } from "../data/normalise.ts";
 import { publicFinding } from "../data/public.ts";
 import type { Store } from "../data/store.ts";
+import { MAX_LIMIT } from "../search/search.ts";
 import type { Search, SearchOptions } from "../search/search.ts";
 
 // Thrown by the checks below; the error handler turns it into HTTP 400. Its message is
@@ -51,28 +52,52 @@ function duplicatesParam(query: Query): boolean {
   throw new BadRequest('Parameter "duplicates" must be 1, true, 0 or false');
 }
 
+// The same limit as the MCP tool's "query". The search does work for every word of the
+// query on every finding, so its length is bounded here, at the edge.
+const MAX_QUERY_LENGTH = 200;
+
+// Counted in characters (code points), as the MCP tool's schema counts them: the spread
+// walks the string by code point, so an emoji counts once.
+function queryParam(query: Query): string | undefined {
+  const value = textParam(query, "q");
+  if (value !== undefined && [...value].length > MAX_QUERY_LENGTH) {
+    throw new BadRequest(`Parameter "q" must be at most ${MAX_QUERY_LENGTH} characters`);
+  }
+  return value;
+}
+
+const LIMIT_RULE = `Parameter "limit" must be a whole number from 1 to ${MAX_LIMIT}`;
+const OFFSET_RULE = 'Parameter "offset" must be a whole number, 0 or more';
+
 // Digits only, so "1e3", "-1", "2.5" and "" are refused instead of being read as some
 // number the caller did not mean. At most nine digits keeps the value an exact integer.
-function wholeNumberParam(query: Query, name: string): number | undefined {
+// `rule` is the message for a value that is not such a number.
+function wholeNumberParam(query: Query, name: string, rule: string): number | undefined {
   const value = textParam(query, name);
   if (value === undefined) return undefined;
-  if (!/^\d{1,9}$/.test(value)) {
-    throw new BadRequest(`Parameter "${name}" must be a whole number, 0 or more`);
-  }
+  if (!/^\d{1,9}$/.test(value)) throw new BadRequest(rule);
   return Number(value);
 }
 
-// Parameters with other names are ignored. The search guards the query length and
-// clamps limit and offset itself; the checks here make sure it gets the right types.
+// A limit outside the range is refused, not quietly moved into it: the caller would get
+// another page size than it asked for and never know. The MCP tool does the same.
+function limitParam(query: Query): number | undefined {
+  const limit = wholeNumberParam(query, "limit", LIMIT_RULE);
+  if (limit !== undefined && (limit < 1 || limit > MAX_LIMIT)) throw new BadRequest(LIMIT_RULE);
+  return limit;
+}
+
+// Parameters with other names are ignored. Bad input is refused here, not guessed at:
+// the search trusts its callers to pass a bounded query and whole numbers.
 function searchOptionsOf(request: Request): SearchOptions {
   const query: Query = request.query;
   return {
-    query: textParam(query, "q"),
+    query: queryParam(query),
     type: typeParam(query),
     caseId: textParam(query, "case"),
     includeDuplicates: duplicatesParam(query),
-    limit: wholeNumberParam(query, "limit"),
-    offset: wholeNumberParam(query, "offset"),
+    limit: limitParam(query),
+    offset: wholeNumberParam(query, "offset", OFFSET_RULE),
   };
 }
 

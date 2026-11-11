@@ -18,7 +18,7 @@
     <div class="controls" role="search">
       <div class="field field-query">
         <label for="query">Search in entity and notes</label>
-        <input id="query" type="search" autocomplete="off" spellcheck="false">
+        <input id="query" type="search" maxlength="200" autocomplete="off" spellcheck="false">
       </div>
       <div class="field">
         <label for="type">Type</label>
@@ -51,9 +51,6 @@
     <section id="results" aria-labelledby="results-heading">
       <h2 id="results-heading">Results</h2>
       <p id="summary" role="status" aria-live="polite">Loading…</p>
-      <p id="truncated" class="notice" hidden>
-        The query was too long. Only its first 200 characters and first 10 words were used.
-      </p>
       <div id="search-error" class="error" role="alert" hidden>
         <p id="search-error-text"></p>
         <button id="retry" type="button">Try again</button>

@@ -24,7 +24,6 @@ const el = {
   duplicates: byId("duplicates"),
   caseError: byId("case-error"),
   summary: byId("summary"),
-  truncated: byId("truncated"),
   searchError: byId("search-error"),
   searchErrorText: byId("search-error-text"),
   retry: byId("retry"),
@@ -315,7 +314,6 @@ function showResults(result) {
   rowsByKey.clear();
   el.hits.replaceChildren(...result.hits.map(hitRow));
   el.searchError.hidden = true;
-  el.truncated.hidden = result.truncated !== true;
   el.summary.textContent = summaryText(result.total);
   showEmptyState(result.total === 0);
   showPager(result);
@@ -332,7 +330,6 @@ function showSearchError(message) {
   el.hits.replaceChildren();
   el.pager.hidden = true;
   el.empty.hidden = true;
-  el.truncated.hidden = true;
   el.summary.textContent = "The search failed.";
   el.searchErrorText.textContent = message;
   el.searchError.hidden = false;
@@ -535,6 +532,9 @@ function observedValue(finding) {
 // right where the link is made: a javascript: or data: address in an href would run code
 // when clicked, so a second, independent check is worth four lines.
 function isWebUrl(text) {
+  // "http:/x" and "http:x" also parse as http:, but a browser opens them relative to
+  // this page's own address, so the text must itself start with the full scheme.
+  if (!/^https?:\/\//i.test(text)) return false;
   try {
     const protocol = new URL(text).protocol;
     return protocol === "http:" || protocol === "https:";
@@ -556,7 +556,8 @@ function sourceValue(finding) {
 function sourceLink(url) {
   // The whole address is the link text, so the analyst sees where it leads before clicking.
   const link = markAsEvidence(element("a", undefined, url));
-  link.href = url;
+  // The parsed form, so the browser opens exactly the address that was checked.
+  link.href = new URL(url).href;
   // A new tab, and the opened site gets neither a handle on this page nor its address.
   link.target = "_blank";
   link.rel = "noopener noreferrer";
