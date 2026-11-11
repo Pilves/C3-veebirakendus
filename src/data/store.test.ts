@@ -74,6 +74,12 @@ describe("findById", () => {
     assert.deepEqual(keysOf(store, "  T-1\n"), ["T-1"]);
   });
 
+  test("a record whose id was written with whitespace around it is still reached", () => {
+    const padded = storeOf([record("T-1"), { ...record("T-8"), id: " T-8\t" }]);
+    assert.deepEqual(keysOf(padded, "T-8"), ["T-8"]);
+    assert.deepEqual(keysOf(padded, " T-8 "), ["T-8"]);
+  });
+
   test("ids are case-sensitive", () => {
     assert.deepEqual(store.findById("t-1"), []);
   });

@@ -26,7 +26,7 @@ export type Flag =
 
 export type Finding = {
   key: string; // unique across the dataset
-  id: string; // the id as given in the data, "" when missing
+  id: string; // the id as given in the data, trimmed; "" when missing
   entity: string; // trimmed; letter case preserved for display
   type: FindingType; // one of the six valid types, or "unknown"
   caseIds: string[]; // always an array, possibly empty
@@ -49,9 +49,11 @@ function fieldsOf(raw: unknown): RawFields {
 
 // ---------- id and key ----------
 
+// Trimmed, because a lookup trims what the analyst typed: an id stored with a space
+// around it could never be found. An id of only whitespace is no id at all.
 function idOf(raw: unknown): string {
   const id = fieldsOf(raw).id;
-  return typeof id === "string" ? id : "";
+  return typeof id === "string" ? id.trim() : "";
 }
 
 function countIds(rawRecords: unknown[]): Map<string, number> {
@@ -61,6 +63,52 @@ function countIds(rawRecords: unknown[]): Map<string, number> {
     counts.set(id, (counts.get(id) ?? 0) + 1);
   }
   return counts;
+}
+
+// The ids that exactly one record has. Such a record's key is its id, always, so these
+// are set aside before any key is made up for another record.
+function uniqueIdsOf(idCounts: Map<string, number>): Set<string> {
+  const unique = new Set<string>();
+  for (const [id, count] of idCounts) {
+    if (id !== "" && count === 1) unique.add(id);
+  }
+  return unique;
+}
+
+// Hands out the keys of one dataset and remembers them, so no key is ever given twice.
+// A made-up key can look like a real id: ids "A", "A" and "A.1" would give "A.1" twice,
+// and an id "row-2" would clash with a record without an id on row 2. A key that is
+// taken is therefore stepped over: the suffix goes up until the key is free.
+type KeyMaker = {
+  numbered(base: string): string; // base.1, base.2, ...: the next one that is free
+  forRow(row: number): string; // row-N, or row-N.1, ... when a record has that as its id
+};
+
+function createKeyMaker(taken: Set<string>): KeyMaker {
+  // The last suffix used per base, so a thousand records sharing one id are numbered
+  // by counting on, not by trying 1, 2, 3, ... from the start each time.
+  const lastSuffix = new Map<string, number>();
+
+  function numbered(base: string): string {
+    let suffix = lastSuffix.get(base) ?? 0;
+    let key: string;
+    do {
+      suffix++;
+      key = `${base}.${suffix}`;
+    } while (taken.has(key));
+    lastSuffix.set(base, suffix);
+    taken.add(key);
+    return key;
+  }
+
+  function forRow(row: number): string {
+    const key = `row-${row}`;
+    if (taken.has(key)) return numbered(key);
+    taken.add(key);
+    return key;
+  }
+
+  return { numbered, forRow };
 }
 
 // ---------- entity ----------
@@ -86,7 +134,10 @@ function shapeOf(entity: string): Shape {
   if (/^https?:\/\//i.test(entity)) return "url";
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(entity)) return "ipv4";
   if (entity.includes(":") && /^[0-9a-f:]+$/i.test(entity)) return "ipv6";
-  if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(entity)) return "email";
+  // The labels after the @ may not contain a dot themselves. That leaves only one way
+  // to read any text, so the check stays fast on a long hostile entity; "[^@\s]+\."
+  // could split a run of dots in many ways and took seconds on 40 kB.
+  if (/^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$/.test(entity)) return "email";
   if (WALLET.test(entity)) return "wallet";
   if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(entity)) return "hostname";
   return /\s/.test(entity) ? "words" : "token";
@@ -142,20 +193,46 @@ function cleanCaseIds(raw: unknown, flags: Flag[]): string[] {
 
 // Only ISO 8601 with an explicit zone. Date.parse alone also accepts "March 7" and reads
 // a time without a zone as local time, which would differ from machine to machine.
-const ISO_WITH_ZONE = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)$/;
+// The groups are year, month, day and hour, for the check in isoEpochMs.
+const ISO_WITH_ZONE = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)$/;
 
 // 1e11 ms is 1973 and 1e13 ms is 2286. A number outside that range is not a millisecond
 // timestamp (it could be seconds), and guessing its unit would invent a wrong date.
 const MIN_EPOCH_MS = 1e11;
 const MAX_EPOCH_MS = 1e13;
 
+// True when the day exists in the calendar. Date.UTC rolls an impossible day over into
+// the next month, so the three numbers are put in and read back: they survive only if
+// the date is real.
+function isCalendarDate(year: number, month: number, day: number): boolean {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
+// Date.parse refuses month 13 or minute 60, but it rolls February 30 over to March 2
+// and reads hour 24 as the next day. Such a time was never observed; keeping the
+// rolled-over value would invent a date, so both are refused here first.
+function isoEpochMs(text: string): number {
+  const match = ISO_WITH_ZONE.exec(text);
+  if (match === null) return NaN;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  if (hour > 23 || !isCalendarDate(year, month, day)) return NaN;
+  return Date.parse(text);
+}
+
 function epochMsOf(raw: unknown): number {
   if (typeof raw === "number") {
     const isMs = Number.isInteger(raw) && raw > MIN_EPOCH_MS && raw < MAX_EPOCH_MS;
     return isMs ? raw : NaN;
   }
-  if (typeof raw === "string" && ISO_WITH_ZONE.test(raw.trim())) return Date.parse(raw.trim());
-  return NaN;
+  return typeof raw === "string" ? isoEpochMs(raw.trim()) : NaN;
 }
 
 function cleanObservedAt(raw: unknown, flags: Flag[]): string | null {
@@ -178,7 +255,11 @@ function cleanSourceUrl(raw: unknown, flags: Flag[]): string | null {
   return null;
 }
 
+// The text must itself begin with "http://" or "https://". new URL alone also accepts
+// "http:/api/cases" and "http:evil.example" as http: URLs, and a browser then opens such
+// a link RELATIVE to this tool's own address: it would not lead where it says.
 function isWebUrl(text: string): boolean {
+  if (!/^https?:\/\//i.test(text)) return false;
   try {
     const protocol = new URL(text).protocol;
     return protocol === "http:" || protocol === "https:";
@@ -208,6 +289,13 @@ function fingerprintOf(finding: Finding): string | null {
   return JSON.stringify(parts);
 }
 
+// Shorter first, then as text, so "F-9" comes before "F-10". Compared as plain text,
+// "F-10" would be the lower one, and the newer record would be called the original.
+function isLowerId(a: string, b: string): boolean {
+  if (a.length !== b.length) return a.length < b.length;
+  return a < b;
+}
+
 function markReimports(findings: Finding[]): void {
   // The original of each fingerprint is the record with the lowest id.
   const originals = new Map<string, Finding>();
@@ -215,7 +303,9 @@ function markReimports(findings: Finding[]): void {
     const fingerprint = fingerprintOf(finding);
     if (fingerprint === null) continue;
     const original = originals.get(fingerprint);
-    if (original === undefined || finding.id < original.id) originals.set(fingerprint, finding);
+    if (original === undefined || isLowerId(finding.id, original.id)) {
+      originals.set(fingerprint, finding);
+    }
   }
   for (const finding of findings) {
     const fingerprint = fingerprintOf(finding);
@@ -235,7 +325,7 @@ function markReimports(findings: Finding[]): void {
 // Never throws on a malformed record and never changes its input.
 export function normaliseFindings(rawRecords: unknown[]): Finding[] {
   const idCounts = countIds(rawRecords);
-  const idsSeen = new Map<string, number>();
+  const keys = createKeyMaker(uniqueIdsOf(idCounts));
   const findings: Finding[] = [];
 
   for (let index = 0; index < rawRecords.length; index++) {
@@ -247,13 +337,11 @@ export function normaliseFindings(rawRecords: unknown[]): Finding[] {
     let key = id;
     if (id === "") {
       // Without an id the position in the file is the only stable name the record has.
-      key = `row-${index + 1}`;
+      key = keys.forRow(index + 1);
       flags.push("id-missing");
     } else if (idCounts.get(id) !== 1) {
       // Every sharer gets a suffix, so a lookup by the bare id can never silently pick one.
-      const position = (idsSeen.get(id) ?? 0) + 1;
-      idsSeen.set(id, position);
-      key = `${id}.${position}`;
+      key = keys.numbered(id);
       flags.push("duplicate-id");
     }
 

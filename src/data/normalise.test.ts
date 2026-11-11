@@ -66,6 +66,58 @@ describe("synthetic records", () => {
     assert.equal(findings[1]!.id, "");
   });
 
+  test("key: a numbered key steps over a real id that looks the same", () => {
+    // Without the step, the second "A" and the record whose id is "A.2" would share a key.
+    const ids = ["A", "A", "A.2", "A.1", "A"];
+    const findings = normaliseFindings(ids.map((id) => record({ id, entity: `${id}.test` })));
+    assert.deepEqual(findings.map((f) => f.key), ["A.3", "A.4", "A.2", "A.1", "A.5"]);
+    assert.deepEqual(findings.map((f) => f.id), ids);
+    assert.equal(new Set(findings.map((f) => f.key)).size, ids.length);
+  });
+
+  test("key: a row key steps over a real id that looks the same", () => {
+    const findings = normaliseFindings([
+      record({ id: "row-2", entity: "a.test" }),
+      record({ id: null, entity: "b.test" }),
+      record({ id: null, entity: "c.test" }),
+    ]);
+    assert.deepEqual(findings.map((f) => f.key), ["row-2", "row-2.1", "row-3"]);
+    assert.deepEqual(findings[1]!.flags, ["id-missing"]);
+  });
+
+  test("key: keys stay unique when made-up keys could meet each other", () => {
+    // Two records share the id "row-3", so both are numbered; the third has no id and
+    // sits on row 3; the fourth has, as its real id, a key the others could be given.
+    const ids = ["row-3", "row-3", null, "row-3.1", null, "row-5"];
+    const findings = normaliseFindings(ids.map((id, n) => record({ id, entity: `${n}.test` })));
+    assert.equal(new Set(findings.map((f) => f.key)).size, ids.length);
+    assert.equal(findings[3]!.key, "row-3.1", "a unique id always keeps its own key");
+    assert.equal(findings[5]!.key, "row-5");
+  });
+
+  test("id: surrounding whitespace is trimmed for id and key, the raw record keeps it", () => {
+    const raw = record({ id: "  T-7\n" });
+    const finding = normaliseFindings([raw])[0]!;
+    assert.equal(finding.id, "T-7");
+    assert.equal(finding.key, "T-7");
+    assert.deepEqual(finding.flags, []);
+    assert.equal((finding.raw as { id: string }).id, "  T-7\n");
+  });
+
+  test("id: ids that differ only in whitespace are the same id", () => {
+    const findings = normaliseFindings([record({ id: "T-7 " }), record({ id: " T-7" })]);
+    assert.deepEqual(findings.map((f) => f.key), ["T-7.1", "T-7.2"]);
+  });
+
+  test("id: an id of only whitespace counts as missing", () => {
+    for (const id of [" ", "\t\n", "\u00a0"]) {
+      const finding = one({ id });
+      assert.equal(finding.id, "");
+      assert.equal(finding.key, "row-1");
+      assert.deepEqual(finding.flags, ["id-missing"]);
+    }
+  });
+
   test("type: a valid type in another spelling is accepted and flagged", () => {
     assert.deepEqual(one({ type: "Domain" }).flags, ["type-nonstandard"]);
     assert.equal(one({ type: "Domain" }).type, "domain");
@@ -115,6 +167,36 @@ describe("synthetic records", () => {
     }
   });
 
+  test("type: a long hostile entity is classified quickly", () => {
+    // The first one took seconds with the old email pattern: each dot could be read
+    // as part of a label or as the dot between two labels.
+    const hostile = [
+      `a@${".".repeat(100_000)}`,
+      `a@${"a.".repeat(50_000)}`,
+      `a@${".a".repeat(50_000)}@`,
+      `${"a".repeat(50_000)}@${"a".repeat(50_000)}`,
+      "a".repeat(100_000),
+      "a.".repeat(50_000),
+      "@".repeat(100_000),
+    ];
+    for (const entity of hostile) {
+      const started = performance.now();
+      const finding = one({ entity, type: "email" });
+      const elapsedMs = performance.now() - started;
+      assert.deepEqual(finding.flags, ["type-mismatch"], entity.slice(0, 8));
+      assert.ok(elapsedMs < 100, `${entity.slice(0, 8)}... took ${Math.round(elapsedMs)} ms`);
+    }
+  });
+
+  test("type: what counts as the shape of an email", () => {
+    for (const entity of ["a@b.test", "first.last@mail.example.test", "a+b@x-y.test"]) {
+      assert.deepEqual(one({ entity, type: "email" }).flags, [], entity);
+    }
+    for (const entity of ["a@b", "a@b..test", "a@.test", "a@b.test.", "a@b@c.test", "a b@c.test"]) {
+      assert.deepEqual(one({ entity, type: "email" }).flags, ["type-mismatch"], entity);
+    }
+  });
+
   test("caseIds: caseId becomes an array of trimmed uppercase ids", () => {
     assert.deepEqual(one({ caseId: "C-9" }).caseIds, ["C-9"]);
     const odd = one({ caseId: " c-9" });
@@ -157,10 +239,59 @@ describe("synthetic records", () => {
     }
   });
 
+  test("observedAt: a day that is not in the calendar is null and flagged", () => {
+    const impossible = [
+      "2026-02-30T00:00:00Z",
+      "2026-02-29T00:00:00Z", // 2026 is not a leap year
+      "2026-04-31T00:00:00Z",
+      "2026-04-31T23:30:00-05:00",
+      "2026-13-01T00:00:00Z",
+      "2026-00-10T00:00:00Z",
+      "2026-09-00T00:00:00Z",
+      "2026-09-01T24:00:00Z",
+      "2026-09-01T25:00:00Z",
+      "2026-09-01T00:60:00Z",
+      "2026-09-01T00:00:60Z",
+    ];
+    for (const observedAt of impossible) {
+      const finding = one({ observedAt });
+      assert.equal(finding.observedAt, null, observedAt);
+      assert.deepEqual(finding.flags, ["time-invalid"], observedAt);
+    }
+  });
+
+  test("observedAt: real days at the edges of a month are kept", () => {
+    for (const day of ["2028-02-29", "2026-02-28", "2026-04-30", "2026-12-31"]) {
+      const finding = one({ observedAt: `${day}T23:59:59Z` });
+      assert.equal(finding.observedAt, `${day}T23:59:59.000Z`);
+      assert.deepEqual(finding.flags, []);
+    }
+    // The day is checked as written, in the string's own zone: 30 April there, 1 May in UTC.
+    const late = one({ observedAt: "2026-04-30T23:30:00-05:00" });
+    assert.equal(late.observedAt, "2026-05-01T04:30:00.000Z");
+    assert.deepEqual(late.flags, []);
+  });
+
   test("sourceUrl: an http(s) URL is kept exactly as written", () => {
     const url = "https://example.test/thread/?utm_source=x&id=1";
     assert.equal(one({ sourceUrl: url }).sourceUrl, url);
     assert.equal(one({ sourceUrl: "http://example.test/" }).sourceUrl, "http://example.test/");
+    for (const kept of ["HTTPS://Example.test/a", "https://user@host/"]) {
+      assert.equal(one({ sourceUrl: kept }).sourceUrl, kept);
+    }
+  });
+
+  test("sourceUrl: text that only parses as http, but leads somewhere else, is not a link", () => {
+    // A browser resolves the first two against the page's own address, and strips the
+    // space from the third: none of them leads where its text says.
+    for (const sourceUrl of ["http:/api/cases", "http:evil.example", " https://example.test/"]) {
+      const finding = one({ sourceUrl });
+      assert.equal(finding.sourceUrl, null, sourceUrl);
+      assert.deepEqual(finding.flags, ["source-not-link"], sourceUrl);
+    }
+    for (const sourceUrl of ["http:/x", "http:x", "https:/x", "https:x", "http://", "//x.test/"]) {
+      assert.equal(one({ sourceUrl }).sourceUrl, null, sourceUrl);
+    }
   });
 
   test("sourceUrl: everything else is not a link, and the raw value survives", () => {
@@ -198,6 +329,16 @@ describe("synthetic records", () => {
     assert.ok(findings[0]!.flags.includes("reimport"));
     assert.equal(findings[1]!.duplicateOf, null);
     assert.deepEqual(findings[1]!.flags, []);
+  });
+
+  test("re-import: the lowest id is found by number, not by text", () => {
+    // As text "F-10" sorts before "F-9", which would make the later record the original.
+    const findings = normaliseFindings([record({ id: "F-10" }), record({ id: "F-9" })]);
+    assert.deepEqual(findings.map((f) => f.duplicateOf), ["F-9", null]);
+    const reversed = normaliseFindings([record({ id: "F-9" }), record({ id: "F-10" })]);
+    assert.deepEqual(reversed.map((f) => f.duplicateOf), [null, "F-9"]);
+    const three = ["F-100", "F-20", "F-3"].map((id) => record({ id }));
+    assert.deepEqual(normaliseFindings(three).map((f) => f.duplicateOf), ["F-3", "F-3", null]);
   });
 
   test("re-import: a difference in case, time, notes or entity means a separate finding", () => {
