@@ -9,7 +9,8 @@
 # One line per check:
 #   PASS  <check>   want <HTTP status> <kind>   got <HTTP status> <kind>
 # where <kind> is the JSON-RPC error code (-32601), "result" for a normal result,
-# "isError" for a tool execution error, or "-" for an empty body.
+# "isError" for a tool execution error, "other-json" for JSON that is not JSON-RPC (the
+# server's refusal of a foreign Host header), or "-" for an empty body.
 # Every answer must also: be application/json when it has a body, never be an SSE stream
 # and never carry an Mcp-Session-Id header; no error may contain a stack trace.
 # Exit code 0 when everything passed, 1 otherwise.
@@ -21,9 +22,9 @@ set -u
 BASE=${1:?usage: mcp-check.sh <base-url>, for example http://127.0.0.1:3000}
 BASE=${BASE%/}
 URL="$BASE/mcp"
-# The port for the Origin checks; 80 when the URL names none.
-PORT=$(printf '%s' "$BASE" | sed -n 's#^.*:\([0-9][0-9]*\)$#\1#p')
-PORT=${PORT:-80}
+# The ":port" for the Origin checks, empty when the URL names none: a browser leaves the
+# default port out of Origin, and "http://localhost:80" is not an origin it ever sends.
+PORT=$(printf '%s' "$BASE" | sed -n 's#^.*\(:[0-9][0-9]*\)$#\1#p')
 VERSION=2026-07-28
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -50,7 +51,7 @@ if (raw !== "") {
   }
 }
 if (r !== undefined) {
-  if (r !== null && r.error) kind = String(r.error.code);
+  if (r !== null && typeof r.error === "object" && r.error) kind = String(r.error.code);
   else if (r !== null && r.result) kind = r.result.isError === true ? "isError" : "result";
   else kind = "other-json";
   if (!/^content-type: application\/json/m.test(h)) problems.push("not application/json");
@@ -168,10 +169,6 @@ bare() {
 
 LIST=$(req 1 tools/list)
 
-if ! curl -s -m 5 -o /dev/null "$BASE/"; then
-  echo "No server answers at $BASE" >&2
-  exit 1
-fi
 echo "MCP endpoint check: $URL (protocol $VERSION)"
 
 # ---------- the methods ----------
@@ -186,6 +183,9 @@ ALSO='r.result.ttlMs >= 0 && r.result.cacheScope === "public"'
 post "server/discover: cache hints" 200 result server/discover "$(req 1 server/discover)"
 ALSO='h.includes("x-content-type-options: nosniff") && h.includes("content-security-policy:")'
 post "server/discover: security headers are sent" 200 result server/discover \
+  "$(req 1 server/discover)"
+ALSO='/^cache-control: no-store\r?$/m.test(h)'
+post "server/discover: Cache-Control is no-store" 200 result server/discover \
   "$(req 1 server/discover)"
 ALSO='r.result.tools.map((t) => t.name).join() === "search_findings,get_finding,list_cases"'
 post "tools/list: three tools in a fixed order" 200 result tools/list "$LIST"
@@ -211,9 +211,18 @@ tool "search_findings: text block is the same JSON" 200 result search_findings \
   '{"query":"","limit":2}'
 ALSO='r.result.structuredContent.limit === 20 && r.result.structuredContent.offset === 0'
 tool "search_findings: the default limit is 20" 200 result search_findings '{"query":""}'
-ALSO='r.result.structuredContent.findings.every((f) => !("raw" in f) && "tier" in f)'
+# A real case, and a total above 0: on an empty list every(...) would hold for anything.
+ALSO='r.result.structuredContent.total > 0 && r.result.structuredContent.findings.length > 0'
+ALSO="$ALSO"' && r.result.structuredContent.findings.every((f) => !("raw" in f) && "tier" in f)'
 tool "search_findings: all filters, no raw records" 200 result search_findings \
-  '{"query":"a","type":"ip","caseId":"C-1","includeDuplicates":true,"limit":50,"offset":0}'
+  '{"query":"a","type":"ip","caseId":"C-117","includeDuplicates":true,"limit":50,"offset":0}'
+ALSO='!("truncated" in r.result.structuredContent)'
+tool "search_findings: the result has no truncated field" 200 result search_findings \
+  '{"query":"a b c d e f g h i j k l","limit":1}'
+QUERY_200=$(printf '%200s' '' | tr ' ' 'a')
+ALSO='r.result.structuredContent.total >= 0 && !("truncated" in r.result.structuredContent)'
+tool "search_findings: a query of 200 characters is used" 200 result search_findings \
+  "{\"query\":\"$QUERY_200\"}"
 ALSO='r.result.structuredContent.findings.map((f) => f.key).join() === "F-10578.1,F-10578.2"'
 tool "get_finding: F-10578 returns both records" 200 result get_finding '{"id":"F-10578"}'
 ALSO='r.result.structuredContent.findings.length === 1'
@@ -239,12 +248,23 @@ tool "get_finding carries the notice" 200 result get_finding '{"id":"F-10463"}'
 
 # ---------- the checks, in the order the server applies them ----------
 
+section "Before rule 1: the Host header (server-wide, not JSON-RPC)"
+# A page that reaches the server by DNS rebinding is same-origin for the browser and may
+# send no Origin; its Host header still names the attacker's site.
+ALSO='typeof r.error === "string" && !raw.includes("evil")'
+post "Host evil.example" 403 other-json tools/list "$LIST" -H 'Host: evil.example'
+ALSO='typeof r.error === "string" && h.includes("content-security-policy:")'
+post "Host localhost.evil.example (with security headers)" 403 other-json tools/list "$LIST" \
+  -H 'Host: localhost.evil.example:3000'
+check "GET with a foreign Host is 403, not 405" 403 other-json -X GET -H 'Host: evil.example'
+post "Host localhost on another port" 200 result tools/list "$LIST" -H 'Host: localhost:9'
+
 section "Rule 1: Origin"
 post "no Origin header" 200 result tools/list "$LIST"
-post "Origin http://localhost:$PORT" 200 result tools/list "$LIST" \
-  -H "Origin: http://localhost:$PORT"
-post "Origin http://127.0.0.1:$PORT" 200 result tools/list "$LIST" \
-  -H "Origin: http://127.0.0.1:$PORT"
+post "Origin http://localhost$PORT" 200 result tools/list "$LIST" \
+  -H "Origin: http://localhost$PORT"
+post "Origin http://127.0.0.1$PORT" 200 result tools/list "$LIST" \
+  -H "Origin: http://127.0.0.1$PORT"
 post "Origin http://[::1]:5173 (another local port)" 200 result tools/list "$LIST" \
   -H 'Origin: http://[::1]:5173'
 ALSO='!("id" in r)'
@@ -262,7 +282,7 @@ check "OPTIONS preflight from a foreign Origin" 403 -32600 -X OPTIONS \
   -H 'Origin: https://evil.example' -H 'Access-Control-Request-Method: POST'
 
 section "Rule 2: only POST"
-ALSO='/^allow: post\r?$/m.test(h)'
+ALSO='/^allow: post\r?$/m.test(h) && /^cache-control: no-store\r?$/m.test(h)'
 check "GET (old SSE stream)" 405 -32600 -X GET -H 'Accept: text/event-stream'
 ALSO='/^allow: post\r?$/m.test(h)'
 check "DELETE (old session end)" 405 -32600 -X DELETE -H 'Mcp-Session-Id: abc-123'
@@ -303,6 +323,11 @@ post "no method" 400 -32600 tools/list "{\"jsonrpc\":\"2.0\",\"id\":1,\"params\"
 ALSO='!("id" in r)'
 post "id null" 400 -32600 tools/list "$(req null tools/list)"
 post "id is an object" 400 -32600 tools/list "$(req '{}' tools/list)"
+ALSO='!("id" in r)'
+post "id 1.5 is not an integer" 400 -32600 tools/list "$(req 1.5 tools/list)"
+# JSON.parse reads 1e400 as Infinity, which would be echoed as null.
+ALSO='!("id" in r)'
+post "id 1e400 is not an integer" 400 -32600 tools/list "$(req 1e400 tools/list)"
 post "a JSON-RPC response as the body" 400 -32600 tools/list \
   '{"jsonrpc":"2.0","id":1,"result":{}}'
 ALSO='r.id === "abc"'
@@ -400,6 +425,9 @@ tool "query is missing" 200 isError search_findings '{}'
 ALSO='!raw.includes("zz_echo")'
 tool "an unknown argument (its name is not echoed)" 200 isError search_findings \
   '{"query":"x","zz_echo":1}'
+ALSO='r.result.content[0].text.includes("at most 200 characters")'
+tool "a query of 201 characters is refused, not cut" 200 isError search_findings \
+  "{\"query\":\"${QUERY_200}a\"}"
 tool "limit 99999" 200 isError search_findings '{"query":"x","limit":99999}'
 tool "limit 0" 200 isError search_findings '{"query":"x","limit":0}'
 tool "limit 1.5" 200 isError search_findings '{"query":"x","limit":1.5}'
