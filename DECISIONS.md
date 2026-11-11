@@ -96,3 +96,46 @@ screen.
 The positions refer to the original text, not the folded one. Folding can
 change a string's length, so each folded character remembers where it came
 from in the original.
+
+## 13. Express 5 for the HTTP layer
+
+Three read-only routes under `/api`. Express is the one runtime dependency
+(65 packages in total with what it pulls in). The API only checks the request,
+calls the store or the search, and shapes the answer.
+
+## 14. Lookup by id returns a list
+
+`GET /api/findings/F-10578` returns both records that share that id; a normal
+id returns a list of one; an unknown id is a 404. The shape is the same every
+time and nothing is silently picked.
+
+## 15. The raw record is only in the detail response
+
+Search results carry the cleaned fields and the flags. The detail response adds
+the record as originally recorded. Search responses stay small, and the detail
+view can show what the source really said.
+
+## 16. Bad input is rejected, not guessed
+
+An unknown type, a non-numeric limit or a repeated parameter gets a 400 with a
+plain message. Falling back to a default would hide the caller's mistake.
+
+## 17. Security headers without a library
+
+- Content-Security-Policy that forbids inline script: the dataset contains
+  script payloads, so this is a second line of defence behind escaping.
+- Referrer-Policy no-referrer: when an analyst clicks through to a source, that
+  site does not learn the address of the investigation tool.
+- X-Content-Type-Options nosniff.
+
+## 18. Case counts exclude re-imports
+
+Each case shows its findings without the re-imported copies, and the copies as
+a separate number, so the counts agree with what a default search shows. A
+finding with two cases counts in both.
+
+## 19. No authentication
+
+The task does not ask for it. The server listens on 127.0.0.1 by default and
+the compose file publishes the port on 127.0.0.1 only. A real deployment of an
+investigation tool would need authentication and an access log.
