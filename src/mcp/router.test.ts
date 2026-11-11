@@ -5,7 +5,7 @@
 // It is the in-process short form of scripts/mcp-check.sh, which needs a running server.
 // The data is the real dataset. It is untrusted: the tests assert on ids, keys, counts
 // and status codes only, and never print or name a note text.
-// Not covered here: the Host check and the security headers, which server.ts adds.
+// Not covered here: the Host check and the security headers, which app.ts adds (see app.test.ts).
 
 import assert from "node:assert/strict";
 import { once } from "node:events";

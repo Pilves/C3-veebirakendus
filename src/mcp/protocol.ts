@@ -118,7 +118,7 @@ function isLocalOrigin(origin: string): boolean {
 // No Origin header means the caller is not a browser page (curl, an MCP client, a
 // server), or a page of this tool itself: a browser always sends Origin on a
 // cross-origin POST. A page that reaches the tool by DNS rebinding is same-origin for
-// the browser and may send none; the Host check in server.ts is what stops that one.
+// the browser and may send none; the Host check in app.ts is what stops that one.
 export function isAllowedOrigin(origin: string | undefined): boolean {
   if (origin === undefined) return true;
   return isLocalOrigin(origin);

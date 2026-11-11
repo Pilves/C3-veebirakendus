@@ -121,7 +121,7 @@ function detailedFinding(finding: Finding) {
 // ---------- errors ----------
 
 // The client only ever gets a fixed message or one written in this file: no stack trace
-// and no internal error text. The unused `_next` has to stay: see handleError in server.ts.
+// and no internal error text. The unused `_next` has to stay: see handleError in app.ts.
 const handleError: ErrorRequestHandler = (error, _request, response, _next) => {
   if (error instanceof BadRequest) {
     response.status(400).json({ error: error.message });

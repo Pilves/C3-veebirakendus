@@ -3,7 +3,7 @@
 // The data is the real dataset. It is untrusted: the tests assert on ids, keys, counts
 // and status codes only, and never print or name a note text.
 // Not covered here: the security headers, the Host check and the JSON 404, which are
-// added by server.ts and not by this router.
+// added by app.ts and not by this router.
 
 import assert from "node:assert/strict";
 import { once } from "node:events";

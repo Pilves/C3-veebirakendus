@@ -73,7 +73,8 @@ src/data/             load, normalise, look up by id, list cases
 src/search/           the one search function
 src/http/             the JSON API and the Host check
 src/mcp/              the MCP endpoint
-src/server.ts         wires it together and listens
+src/app.ts            builds the Express app: headers, Host check, routers, static files
+src/server.ts         loads the data and listens
 public/               the UI: one HTML file, one script, one stylesheet
 scripts/              data exploration and the MCP check
 ```

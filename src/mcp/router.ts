@@ -10,7 +10,7 @@
 // THE ORDER OF THE CHECKS. The spec defines none, so it is fixed here, cheapest and most
 // general first. Each step answers with the HTTP status and JSON-RPC code shown.
 // (Before all of them the server refuses a foreign Host header for the whole app, with
-// 403 and a plain JSON error: see server.ts.)
+// 403 and a plain JSON error: see app.ts.)
 //    1. Origin present and not allowed                        403  -32600  (no id)
 //    2. HTTP method is not POST                               405  -32600  (no id)
 //    3. Content-Type is not application/json                  415  -32600  (no id)
@@ -137,7 +137,7 @@ export function createMcpRouter(store: Store, search: Search): Router {
   };
 
   // Step 4, the failures: the body parser passes its errors here. The unused `_next`
-  // has to stay: see handleError in server.ts.
+  // has to stay: see handleError in app.ts.
   const handleBodyError: ErrorRequestHandler = (error, _request, response, _next) => {
     const failure = bodyParserError(error);
     if (failure.status === 500) console.error(error);
