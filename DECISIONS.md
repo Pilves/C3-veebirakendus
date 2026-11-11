@@ -160,9 +160,9 @@ finding with two cases counts in both.
 
 ## 19. No authentication
 
-The task does not ask for it. The server listens on 127.0.0.1 by default and
-the compose file publishes the port on 127.0.0.1 only. A real deployment of an
-investigation tool would need authentication, an access log and rate limiting.
+The task does not ask for it, so the tool is kept off the network instead:
+see decisions 30 and 31. A real deployment of an investigation tool would
+need authentication, an access log and rate limiting.
 
 ## 20. MCP endpoint is hand-rolled, not the SDK
 
@@ -182,12 +182,9 @@ names the spec page and phrase it implements.
 Cost: conformance is on me. `scripts/mcp-check.sh` runs about a hundred checks
 against a running server.
 
-Tested with two real clients in their 2026-07-28 mode: the official SDK client
-(`@modelcontextprotocol/client` 2.4.0) and the MCP Inspector CLI 2.14.0.
-Discovery, the tool list and all three tools worked with both, and the SDK
-honoured the cache hints. A client in its older default mode sends
-`initialize` and gets the documented refusal, and it shows the user the
-message that names the supported version.
+Also tried by hand with two real clients; the README names them and what
+worked. A client in its older default mode sends `initialize` and gets the
+documented refusal, with a message that names the supported version.
 
 ## 21. Order of the MCP checks
 
@@ -303,38 +300,27 @@ detail shows UTC and local time.
 
 ## 33. Case ids, notes and the file's own count
 
-- Case id: always a list. `" c-117"` becomes `C-117` and is flagged, `null`
-  becomes an empty list and is flagged, and the one record with two cases
-  belongs to both. There is no case entity in the data, so `list_cases` is
-  derived from these ids: 40 cases, C-101 to C-140, and one finding without a
-  case.
-- Notes: four records have no `notes` key and three have `null`. Both become
-  `null` with one flag; the raw record keeps the difference. Notes are never
-  trimmed, unescaped or stripped of tags, so a literal `&lt;` stays those four
-  characters.
-- `_meta.count` says 1032 and the file has 1032 records. The loader counts the
-  records itself and does not use `_meta`.
-- The numbers: 1032 records, 1030 different ids (two ids are used twice), 30
-  re-imports, so 1002 findings are shown by default.
+What the app does with each is in the README's data table. What the table
+does not say:
+
+- There is no case entity in the data, so `list_cases` is derived from the
+  case ids on the findings.
+- A missing `notes` key and a `null` both become `null` with one flag; the raw
+  record keeps the difference. Notes are never trimmed, unescaped or stripped
+  of tags, so a literal `&lt;` stays those four characters.
+- The loader counts the records itself and does not use `_meta.count`.
 - Source URLs are kept exactly as written, including the `utm_` parameters and
   trailing slashes that only the re-imports have.
 
 ## 34. What "search in Estonian and English" means here
 
 Both languages are searchable as written, and a query works with or without
-Estonian letters. Examples from the data:
+Estonian letters. There is no stemming, no transliteration and no translation,
+so one query finds only the records written in its own language. The README
+lists queries from the data that work and that do not.
 
-- Finds results: `ookull` (Öökull), `sifreeritud` (šifreeritud), `zurnaal`
-  (žurnaal), `rünnaku`, `serveris`.
-- Finds nothing: `rünne` when the note says `rünnaku` (another form of the
-  word), `shifreeritud` (sh for š), `attack` when the note says `rünnak`.
-- Finds half: `phishing` gives 61 findings and `õngitsus` gives 63 others. It
-  is the same thing noted in two languages.
-
-So there is no stemming, no transliteration and no translation between the two
-languages, and one query finds only the records written in its own language. Fixing that needs a stemmer
-for Estonian and a translation step or a bilingual word list, which I judged
-out of scope.
+Fixing that needs a stemmer for Estonian and a translation step or a bilingual
+word list, which I judged out of scope.
 
 ## 35. Tests cover the logic and the wiring, not the UI
 
