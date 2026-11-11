@@ -30,8 +30,9 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 PASSED=0
 FAILED=0
-# Optional extra condition for the NEXT check only: a JavaScript expression over r (the parsed
-# body), h (the response headers, lowercased) and raw (the body text).
+# Optional extra conditions for the NEXT check only: JavaScript expressions over r (the parsed
+# body), h (the response headers, lowercased) and raw (the body text). One per line; each
+# is judged on its own, so a failure names the line that does not hold.
 ALSO=''
 
 # Reads one response and prints two lines: its kind, and what is wrong with it (if anything).
@@ -69,12 +70,13 @@ if (failed && /\\n\s+at |node:internal|node_modules|\.ts:\d/.test(raw)) {
 }
 if (h.includes("text/event-stream")) problems.push("answered with an SSE stream");
 if (/^mcp-session-id:/m.test(h)) problems.push("sent an Mcp-Session-Id header");
-if (also) {
+for (const condition of also.split("\n")) {
+  if (condition === "") continue;
   let holds = false;
   try {
-    holds = new Function("r", "h", "raw", `return (${also});`)(r, h, raw) === true;
+    holds = new Function("r", "h", "raw", `return (${condition});`)(r, h, raw) === true;
   } catch {}
-  if (!holds) problems.push(`does not hold: ${also}`);
+  if (!holds) problems.push(`does not hold: ${condition}`);
 }
 console.log(kind);
 console.log(problems.join("; "));
@@ -174,28 +176,23 @@ echo "MCP endpoint check: $URL (protocol $VERSION)"
 # ---------- the methods ----------
 
 section "server/discover and tools/list"
-ALSO='r.id === 1 && r.result.supportedVersions.join() === "2026-07-28"'
-post "server/discover: supportedVersions" 200 result server/discover "$(req 1 server/discover)"
-ALSO='JSON.stringify(r.result.capabilities) === "{\"tools\":{}}"'
-post "server/discover: capabilities are tools only" 200 result server/discover \
+# One request each, with one condition per line: supported version, capabilities are
+# tools only, cache hints, security headers, Cache-Control.
+ALSO='r.id === 1 && r.result.supportedVersions.join() === "2026-07-28"
+JSON.stringify(r.result.capabilities) === "{\"tools\":{}}"
+r.result.ttlMs >= 0 && r.result.cacheScope === "public"
+h.includes("x-content-type-options: nosniff") && h.includes("content-security-policy:")
+/^cache-control: no-store\r?$/m.test(h)'
+post "server/discover: version, capabilities, cache, headers" 200 result server/discover \
   "$(req 1 server/discover)"
-ALSO='r.result.ttlMs >= 0 && r.result.cacheScope === "public"'
-post "server/discover: cache hints" 200 result server/discover "$(req 1 server/discover)"
-ALSO='h.includes("x-content-type-options: nosniff") && h.includes("content-security-policy:")'
-post "server/discover: security headers are sent" 200 result server/discover \
-  "$(req 1 server/discover)"
-ALSO='/^cache-control: no-store\r?$/m.test(h)'
-post "server/discover: Cache-Control is no-store" 200 result server/discover \
-  "$(req 1 server/discover)"
-ALSO='r.result.tools.map((t) => t.name).join() === "search_findings,get_finding,list_cases"'
-post "tools/list: three tools in a fixed order" 200 result tools/list "$LIST"
-ALSO='r.result.ttlMs >= 0 && r.result.cacheScope === "public" && !("nextCursor" in r.result)'
-post "tools/list: cache hints, no nextCursor" 200 result tools/list "$LIST"
-ALSO='r.result.tools.every((t) => t.inputSchema.type === "object"'
-ALSO="$ALSO"' && t.inputSchema.additionalProperties === false && t.annotations.readOnlyHint)'
-post "tools/list: closed object schemas, read-only" 200 result tools/list "$LIST"
-ALSO='r.result.tools.every((t) => /untrusted/.test(t.description) && !("outputSchema" in t))'
-post "tools/list: descriptions warn about untrusted text" 200 result tools/list "$LIST"
+# Fixed order, cache hints without nextCursor, closed read-only schemas, the warning.
+ALSO='r.result.tools.map((t) => t.name).join() === "search_findings,get_finding,list_cases"
+r.result.ttlMs >= 0 && r.result.cacheScope === "public" && !("nextCursor" in r.result)
+r.result.tools.every((t) => t.inputSchema.type === "object")
+r.result.tools.every((t) => t.inputSchema.additionalProperties === false)
+r.result.tools.every((t) => t.annotations.readOnlyHint)
+r.result.tools.every((t) => /untrusted/.test(t.description) && !("outputSchema" in t))'
+post "tools/list: order, cache, closed schemas, warning" 200 result tools/list "$LIST"
 ALSO='r.result.tools.length === 3'
 post "tools/list: a cursor is ignored" 200 result tools/list \
   "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{\"cursor\":\"abc\",$META}}"
@@ -223,6 +220,10 @@ QUERY_200=$(printf '%200s' '' | tr ' ' 'a')
 ALSO='r.result.structuredContent.total >= 0 && !("truncated" in r.result.structuredContent)'
 tool "search_findings: a query of 200 characters is used" 200 result search_findings \
   "{\"query\":\"$QUERY_200\"}"
+# The flag "reimport" lists the re-imported copies; the facets are for the UI only.
+ALSO='r.result.structuredContent.total === 30 && !("facets" in r.result.structuredContent)'
+tool "search_findings: flag reimport finds 30 copies" 200 result search_findings \
+  '{"query":"","flag":"reimport"}'
 ALSO='r.result.structuredContent.findings.map((f) => f.key).join() === "F-10578.1,F-10578.2"'
 tool "get_finding: F-10578 returns both records" 200 result get_finding '{"id":"F-10578"}'
 ALSO='r.result.structuredContent.findings.length === 1'
@@ -433,6 +434,7 @@ tool "limit 0" 200 isError search_findings '{"query":"x","limit":0}'
 tool "limit 1.5" 200 isError search_findings '{"query":"x","limit":1.5}'
 tool "offset -1" 200 isError search_findings '{"query":"x","offset":-1}'
 tool "type is not in the enum" 200 isError search_findings '{"query":"x","type":"zzz"}'
+tool "flag is not in the enum" 200 isError search_findings '{"query":"x","flag":"nonsense"}'
 tool "includeDuplicates is a string" 200 isError search_findings \
   '{"query":"x","includeDuplicates":"true"}'
 tool "get_finding without id" 200 isError get_finding '{}'

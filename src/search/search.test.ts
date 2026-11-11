@@ -1,26 +1,18 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
-import { normaliseFindings, VALID_TYPES } from "../data/normalise.ts";
-import type { Finding, FindingType } from "../data/normalise.ts";
+import { ALL_TYPES, FLAGS, normaliseFindings } from "../data/normalise.ts";
+import type { Finding } from "../data/normalise.ts";
+import { loadRawFindings, record } from "../testing.ts";
+import type { Raw } from "../testing.ts";
 import { createSearch, foldText } from "./search.ts";
-import type { HighlightRange, Search, SearchResult } from "./search.ts";
-
-type Raw = { [name: string]: unknown };
+import type { HighlightRange, Search, SearchOptions, SearchResult } from "./search.ts";
 
 // Builds findings from small raw records. Each record gets its own id (T-1, T-2, ...)
 // unless it sets one, so two records are never taken for the same finding by accident.
 function findingsOf(records: Raw[]): Finding[] {
-  const raws = records.map((overrides, index) => ({
-    id: `T-${index + 1}`,
-    caseId: "C-1",
-    entity: "example.test",
-    type: "domain",
-    sourceUrl: "https://example.test/page",
-    observedAt: "2026-09-01T00:00:00Z",
-    notes: null,
-    ...overrides,
-  }));
+  const raws = records.map((overrides, index) =>
+    record({ id: `T-${index + 1}`, notes: null, ...overrides }),
+  );
   return normaliseFindings(raws);
 }
 
@@ -438,6 +430,108 @@ describe("duplicates", () => {
   });
 });
 
+// One test per line of the rules written above passesCaseFilter in search.ts.
+describe("flag filter and facets", () => {
+  // T-2 is a re-imported copy of T-1, and T-6 of T-5 (those two are in case C-2).
+  // T-3 has a type that is not one of the six, and T-4 has no readable time.
+  const search = searchOf([
+    { id: "T-1", entity: "copy.test", notes: "same" },
+    { id: "T-2", entity: "copy.test", notes: "same" },
+    { id: "T-3", entity: "mystery", type: "banana" },
+    { id: "T-4", entity: "10.0.0.1", type: "ip", observedAt: "yesterday" },
+    { id: "T-5", entity: "other.test", caseId: "C-2", notes: "other" },
+    { id: "T-6", entity: "other.test", caseId: "C-2", notes: "other" },
+  ]);
+
+  test("without a flag filter the results are the visible records, as before", () => {
+    assert.deepEqual(keysOf(search()).sort(), ["T-1", "T-3", "T-4", "T-5"]);
+    assert.equal(search({ includeDuplicates: true }).total, 6);
+  });
+
+  test("a flag filter keeps the visible records that carry the flag", () => {
+    assert.deepEqual(keysOf(search({ flag: "time-invalid" })), ["T-4"]);
+    assert.deepEqual(keysOf(search({ flag: "type-unknown" })), ["T-3"]);
+    assert.equal(search({ flag: "notes-missing" }).total, 2);
+    assert.equal(search({ flag: "id-missing" }).total, 0);
+  });
+
+  test("the flag reimport shows the copies even without includeDuplicates", () => {
+    assert.deepEqual(keysOf(search({ flag: "reimport" })).sort(), ["T-2", "T-6"]);
+    const withCopies = search({ flag: "reimport", includeDuplicates: true });
+    assert.deepEqual(keysOf(withCopies).sort(), ["T-2", "T-6"]);
+  });
+
+  test("any other flag hides the copies unless includeDuplicates is set", () => {
+    // An original and its copy, both in two cases, so both carry case-multiple.
+    const copies = searchOf([
+      { id: "T-1", entity: "copy.test", notes: "same", caseId: ["C-1", "C-2"] },
+      { id: "T-2", entity: "copy.test", notes: "same", caseId: ["C-1", "C-2"] },
+    ]);
+    assert.deepEqual(keysOf(copies({ flag: "case-multiple" })), ["T-1"]);
+    const shown = copies({ flag: "case-multiple", includeDuplicates: true });
+    assert.deepEqual(keysOf(shown), ["T-1", "T-2"]);
+  });
+
+  test("the flag filter is combined with the query, the case and the type filter", () => {
+    assert.deepEqual(keysOf(search({ flag: "reimport", caseId: "C-2" })), ["T-6"]);
+    assert.deepEqual(keysOf(search({ flag: "reimport", query: "copy" })), ["T-2"]);
+    assert.equal(search({ flag: "reimport", type: "ip" }).total, 0);
+    assert.deepEqual(keysOf(search({ flag: "notes-missing", type: "ip" })), ["T-4"]);
+  });
+
+  test("facets: every type and every flag is present, zero when none", () => {
+    const { facets } = search({ query: "zz-no-such-text" });
+    assert.deepEqual(Object.keys(facets.types), ALL_TYPES);
+    assert.deepEqual(Object.keys(facets.flags), [...FLAGS]);
+    assert.equal(facets.types.wallet, 0);
+    assert.equal(facets.flags["id-missing"], 0);
+  });
+
+  test("facets.types ignores the type filter itself", () => {
+    const expected = { domain: 2, ip: 1, email: 0, handle: 0, alias: 0, wallet: 0, unknown: 1 };
+    assert.deepEqual(search().facets.types, expected);
+    assert.deepEqual(search({ type: "ip" }).facets.types, expected);
+    assert.equal(search({ type: "ip" }).total, 1);
+  });
+
+  test("facets.types follows the flag filter and the visibility rule", () => {
+    assert.equal(search({ includeDuplicates: true }).facets.types.domain, 4);
+    assert.equal(search({ flag: "reimport" }).facets.types.domain, 2);
+    assert.equal(search({ flag: "time-invalid" }).facets.types.domain, 0);
+    assert.equal(search({ flag: "time-invalid" }).facets.types.ip, 1);
+  });
+
+  test("facets.flags ignores the flag filter itself", () => {
+    const unfiltered = search().facets.flags;
+    assert.deepEqual(search({ flag: "time-invalid" }).facets.flags, unfiltered);
+    assert.equal(unfiltered["time-invalid"], 1);
+    assert.equal(unfiltered["type-unknown"], 1);
+    assert.equal(unfiltered["notes-missing"], 2);
+  });
+
+  test("facets.flags follows the type filter", () => {
+    const { flags } = search({ type: "ip" }).facets;
+    assert.equal(flags["time-invalid"], 1);
+    assert.equal(flags["type-unknown"], 0);
+    assert.equal(flags.reimport, 0);
+  });
+
+  test("facets.flags.reimport counts the copies whatever includeDuplicates says", () => {
+    assert.equal(search().facets.flags.reimport, 2);
+    assert.equal(search({ includeDuplicates: true }).facets.flags.reimport, 2);
+  });
+
+  test("facets follow the query and the case filter", () => {
+    assert.equal(search({ query: "copy" }).facets.types.domain, 1);
+    assert.equal(search({ caseId: "C-2" }).facets.flags.reimport, 1);
+    assert.equal(search({ caseId: "C-2" }).facets.types.ip, 0);
+  });
+
+  test("facets count every match, not only the returned page", () => {
+    assert.deepEqual(search({ limit: 1, offset: 3 }).facets, search().facets);
+  });
+});
+
 describe("paging", () => {
   // Five findings with different dates, so the full order is T-5, T-4, T-3, T-2, T-1.
   const search = searchOf(
@@ -613,7 +707,13 @@ describe("long queries", () => {
 describe("createSearch", () => {
   test("no findings give an empty result", () => {
     const result = createSearch([])({ query: "anything" });
-    assert.deepEqual(result, { total: 0, limit: 50, offset: 0, hits: [] });
+    const { facets, ...rest } = result;
+    assert.deepEqual(rest, { total: 0, limit: 50, offset: 0, hits: [] });
+    // Every type and every flag is present, with a count of zero.
+    assert.deepEqual(Object.keys(facets.types), ALL_TYPES);
+    assert.deepEqual(Object.keys(facets.flags), [...FLAGS]);
+    const counts = [...Object.values(facets.types), ...Object.values(facets.flags)];
+    assert.ok(counts.every((count) => count === 0));
   });
 
   test("hits carry the finding objects that were passed in, unchanged", () => {
@@ -630,9 +730,7 @@ describe("createSearch", () => {
 // ======================================================================================
 
 describe("real dataset", () => {
-  const dataPath = new URL("../../data/findings.json", import.meta.url);
-  const data: { findings: unknown[] } = JSON.parse(readFileSync(dataPath, "utf8"));
-  const findings = normaliseFindings(data.findings);
+  const findings = normaliseFindings(loadRawFindings());
   const originals = findings.filter((finding) => finding.duplicateOf === null);
   const search = createSearch(findings);
 
@@ -650,14 +748,49 @@ describe("real dataset", () => {
   });
 
   test("each type filter returns as many findings as a direct count", () => {
-    const types: FindingType[] = [...VALID_TYPES, "unknown"];
     let sum = 0;
-    for (const type of types) {
+    for (const type of ALL_TYPES) {
       const expected = originals.filter((finding) => finding.type === type).length;
       assert.equal(search({ type }).total, expected, type);
       sum += expected;
     }
     assert.equal(sum, 1002);
+  });
+
+  test("no filters: the type counts add up to 1002 and 30 records are re-imports", () => {
+    const { facets } = search();
+    const sum = Object.values(facets.types).reduce((a, b) => a + b, 0);
+    assert.equal(sum, 1002);
+    assert.equal(facets.flags.reimport, 30);
+    assert.equal(search({ flag: "reimport" }).total, 30);
+  });
+
+  test("every facet count is the total of the search with that filter set", () => {
+    const caseId = picked[0]?.caseIds[0];
+    const combinations: SearchOptions[] = [
+      {},
+      { includeDuplicates: true },
+      { query: "a" },
+      { query: "oo", includeDuplicates: true },
+      { type: "domain" },
+      { type: "unknown", includeDuplicates: true },
+      { flag: "reimport" },
+      { flag: "reimport", type: "ip" },
+      { flag: "type-mismatch", includeDuplicates: true },
+      { flag: "notes-missing", query: "e", type: "handle" },
+      { caseId },
+      { caseId, flag: "case-multiple", query: "a" },
+    ];
+    for (const options of combinations) {
+      const label = JSON.stringify(options);
+      const { facets } = search(options);
+      for (const type of ALL_TYPES) {
+        assert.equal(search({ ...options, type }).total, facets.types[type], `${label} ${type}`);
+      }
+      for (const flag of FLAGS) {
+        assert.equal(search({ ...options, flag }).total, facets.flags[flag], `${label} ${flag}`);
+      }
+    }
   });
 
   test("a case filter returns as many findings as a direct count", () => {
@@ -740,7 +873,7 @@ describe("real dataset", () => {
   });
 
   test("the same query gives the same result every time", () => {
-    const again = createSearch(normaliseFindings(data.findings));
+    const again = createSearch(normaliseFindings(loadRawFindings()));
     for (const query of ["", "a", "oo", "e e", picked[0]?.entity ?? ""]) {
       const first = search({ query, limit: 200 });
       assert.deepEqual(keysOf(search({ query, limit: 200 })), keysOf(first));

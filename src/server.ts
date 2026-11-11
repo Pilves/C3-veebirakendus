@@ -124,7 +124,7 @@ app.use(setSecurityHeaders);
 app.use(refuseForeignHost);
 app.use(["/api", "/mcp"], forbidCaching);
 app.use("/api", createApiRouter(store, search));
-// The same store and search as the API, so the two interfaces cannot disagree.
+// The same store and search as the API.
 app.use("/mcp", createMcpRouter(store, search));
 // The browser UI: three static files. Mounted after the routers above, so a file can
 // never shadow /api or /mcp, and before the two handlers below, which must stay last.

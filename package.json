@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node src/server.ts",
     "test": "node --test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

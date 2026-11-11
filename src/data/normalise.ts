@@ -7,22 +7,29 @@ export type ValidType = "domain" | "ip" | "email" | "handle" | "alias" | "wallet
 export type FindingType = ValidType | "unknown";
 
 export const VALID_TYPES: ValidType[] = ["domain", "ip", "email", "handle", "alias", "wallet"];
+// Every type a finding can end up with: what the type filters of the API and MCP offer.
+export const ALL_TYPES: FindingType[] = [...VALID_TYPES, "unknown"];
 
-export type Flag =
-  | "id-missing"
-  | "duplicate-id"
-  | "reimport"
-  | "entity-missing"
-  | "entity-whitespace"
-  | "type-nonstandard"
-  | "type-unknown"
-  | "type-mismatch"
-  | "case-missing"
-  | "case-nonstandard"
-  | "case-multiple"
-  | "time-invalid"
-  | "source-not-link"
-  | "notes-missing";
+// Every data-quality flag. The Flag type below is read off this list, so a flag cannot
+// be added to one and forgotten in the other.
+export const FLAGS = [
+  "id-missing",
+  "duplicate-id",
+  "reimport",
+  "entity-missing",
+  "entity-whitespace",
+  "type-nonstandard",
+  "type-unknown",
+  "type-mismatch",
+  "case-missing",
+  "case-nonstandard",
+  "case-multiple",
+  "time-invalid",
+  "source-not-link",
+  "notes-missing",
+] as const;
+
+export type Flag = (typeof FLAGS)[number];
 
 export type Finding = {
   key: string; // unique across the dataset

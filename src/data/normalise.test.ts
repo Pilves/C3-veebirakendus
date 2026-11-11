@@ -1,24 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
+import { loadRawFindings, record } from "../testing.ts";
+import type { Raw } from "../testing.ts";
 import { normaliseFindings } from "./normalise.ts";
 import type { Finding, Flag } from "./normalise.ts";
 
-// A clean record; each test overrides only the field it is about.
-function record(overrides: { [name: string]: unknown } = {}): { [name: string]: unknown } {
-  return {
-    id: "T-1",
-    caseId: "C-1",
-    entity: "example.test",
-    type: "domain",
-    sourceUrl: "https://example.test/page",
-    observedAt: "2026-09-01T00:00:00Z",
-    notes: "plain note",
-    ...overrides,
-  };
-}
-
-function one(overrides: { [name: string]: unknown }): Finding {
+function one(overrides: Raw): Finding {
   return normaliseFindings([record(overrides)])[0]!;
 }
 
@@ -426,10 +413,9 @@ describe("synthetic records", () => {
 // ======================================================================================
 
 describe("real dataset", () => {
-  const dataPath = new URL("../../data/findings.json", import.meta.url);
-  const data: { findings: unknown[] } = JSON.parse(readFileSync(dataPath, "utf8"));
-  const before = structuredClone(data.findings);
-  const findings = normaliseFindings(data.findings);
+  const rawFindings = loadRawFindings();
+  const before = structuredClone(rawFindings);
+  const findings = normaliseFindings(rawFindings);
 
   function withId(id: string): Finding[] {
     return findings.filter((f) => f.id === id);
@@ -446,13 +432,13 @@ describe("real dataset", () => {
   }
 
   test("1032 records in, 1032 out, in the same order", () => {
-    assert.equal(data.findings.length, 1032);
+    assert.equal(rawFindings.length, 1032);
     assert.equal(findings.length, 1032);
-    findings.forEach((finding, index) => assert.equal(finding.raw, data.findings[index]));
+    findings.forEach((finding, index) => assert.equal(finding.raw, rawFindings[index]));
   });
 
   test("the input array is not mutated", () => {
-    assert.deepEqual(data.findings, before);
+    assert.deepEqual(rawFindings, before);
   });
 
   test("all keys are unique", () => {

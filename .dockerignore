@@ -8,3 +8,4 @@ scripts
 Dockerfile
 compose.yaml
 .dockerignore
+src/testing.ts

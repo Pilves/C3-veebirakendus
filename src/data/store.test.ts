@@ -1,26 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
+import { loadRawFindings, recordWithId as record } from "../testing.ts";
+import type { Raw } from "../testing.ts";
 import { normaliseFindings } from "./normalise.ts";
 import { createStore } from "./store.ts";
 import type { CaseSummary, Store } from "./store.ts";
-
-type Raw = { [name: string]: unknown };
-
-// A clean record; each test overrides only the fields it is about. The entity and time
-// follow the id, so two records are never mistaken for a re-import unless a test says so.
-function record(id: string, overrides: Raw = {}): Raw {
-  return {
-    id,
-    caseId: "C-1",
-    entity: `${id}.example.test`,
-    type: "domain",
-    sourceUrl: "https://example.test/page",
-    observedAt: "2026-09-01T00:00:00Z",
-    notes: "plain note",
-    ...overrides,
-  };
-}
 
 function storeOf(records: Raw[]): Store {
   return createStore(normaliseFindings(records));
@@ -214,9 +198,7 @@ describe("listCases", () => {
 // ======================================================================================
 
 describe("real dataset", () => {
-  const dataPath = new URL("../../data/findings.json", import.meta.url);
-  const data: { findings: unknown[] } = JSON.parse(readFileSync(dataPath, "utf8"));
-  const findings = normaliseFindings(data.findings);
+  const findings = normaliseFindings(loadRawFindings());
   const store = createStore(findings);
   const list = store.listCases();
 

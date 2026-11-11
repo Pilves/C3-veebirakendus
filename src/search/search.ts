@@ -5,7 +5,8 @@
 // The findings and the query are both untrusted text. They are only folded, compared and
 // sliced here; nothing is run, and no regular expression is ever built from them.
 
-import type { Finding, FindingType } from "../data/normalise.ts";
+import { ALL_TYPES, FLAGS } from "../data/normalise.ts";
+import type { Finding, FindingType, Flag } from "../data/normalise.ts";
 
 // A half-open range [start, end) in UTF-16 code units of the ORIGINAL string, so that
 // original.slice(start, end) is exactly the text to highlight.
@@ -19,6 +20,7 @@ export type SearchOptions = {
   query?: string;
   type?: FindingType;
   caseId?: string;
+  flag?: Flag; // only findings that carry this data-quality flag
   includeDuplicates?: boolean; // default false: re-imported copies are hidden
   limit?: number; // a whole number; default 50, kept within 1..200
   offset?: number; // a whole number; default 0
@@ -31,11 +33,19 @@ export type SearchHit = {
   notesRanges: HighlightRange[]; // offsets into finding.notes; empty when notes is null
 };
 
+// How many results each filter button would give, so the UI can show live counts.
+// Every type and every flag is present, with 0 when it would give nothing.
+export type Facets = {
+  types: { [type in FindingType]: number }; // total if the type filter were this type
+  flags: { [flag in Flag]: number }; // total if the flag filter were this flag
+};
+
 export type SearchResult = {
   total: number; // matches before paging
   limit: number; // the values actually used, after clamping
   offset: number;
   hits: SearchHit[];
+  facets: Facets; // counted over all matches, not only the returned page
 };
 
 export type Search = (options?: SearchOptions) => SearchResult;
@@ -151,12 +161,66 @@ function tierOf(item: Prepared, query: ParsedQuery): Tier {
   return 3;
 }
 
-function passesFilters(finding: Finding, options: SearchOptions, caseId: string): boolean {
-  if (options.includeDuplicates !== true && finding.duplicateOf !== null) return false;
-  if (options.type !== undefined && finding.type !== options.type) return false;
-  // A blank caseId means "no case filter", like a filter box left empty.
-  if (caseId !== "" && !finding.caseIds.includes(caseId)) return false;
-  return true;
+// ---------- filters and facets ----------
+
+// What a search returns, and what the facets count:
+//   - A record MATCHES when it passes the text query and the case filter.
+//   - A record is VISIBLE when includeDuplicates is true or it is not a re-imported copy
+//     (duplicateOf === null). One exception: the flag filter "reimport" is how the analyst
+//     asks to see the copies, so with it they are shown even without includeDuplicates.
+//   - Results: the records that MATCH, pass the type filter, and
+//       with no flag filter:        are VISIBLE;
+//       with the flag "reimport":   carry that flag;
+//       with any other flag:        are VISIBLE and carry that flag.
+//   - facets.types[t]: the number of results if the type filter were t and everything
+//     else stayed as it is. The type filter itself is ignored; the flag filter applies.
+//   - facets.flags[f]: the number of results if the flag filter were f and everything
+//     else stayed as it is. The flag filter itself is ignored; the type filter applies.
+// So a count on a button is always the total the analyst gets by pressing it.
+
+// A blank caseId means "no case filter", like a filter box left empty.
+function passesCaseFilter(finding: Finding, caseId: string): boolean {
+  return caseId === "" || finding.caseIds.includes(caseId);
+}
+
+function passesTypeFilter(finding: Finding, type: FindingType | undefined): boolean {
+  return type === undefined || finding.type === type;
+}
+
+// The VISIBLE rule and the flag filter together; `flag` undefined means no flag filter.
+function passesFlagFilter(
+  finding: Finding,
+  flag: Flag | undefined,
+  options: SearchOptions,
+): boolean {
+  if (flag === "reimport") return finding.flags.includes(flag);
+  const visible = options.includeDuplicates === true || finding.duplicateOf === null;
+  return visible && (flag === undefined || finding.flags.includes(flag));
+}
+
+// An object with a 0 for every name, so no count is ever missing from the answer.
+function zeroCounts<Name extends string>(names: readonly Name[]): { [name in Name]: number } {
+  // The cast is needed because the object is only complete after the loop.
+  const counts = {} as { [name in Name]: number };
+  for (const name of names) counts[name] = 0;
+  return counts;
+}
+
+// Adds one record that MATCHES to the counts it belongs in.
+function countInFacets(facets: Facets, finding: Finding, options: SearchOptions): void {
+  if (passesFlagFilter(finding, options.flag, options)) facets.types[finding.type]++;
+  if (!passesTypeFilter(finding, options.type)) return;
+  // Only the flags the record carries can count it; under any other flag it is not shown.
+  // A record carries each flag at most once, so it is never counted twice for one flag.
+  for (const flag of finding.flags) {
+    if (passesFlagFilter(finding, flag, options)) facets.flags[flag]++;
+  }
+}
+
+function isResult(finding: Finding, options: SearchOptions): boolean {
+  return (
+    passesTypeFilter(finding, options.type) && passesFlagFilter(finding, options.flag, options)
+  );
 }
 
 type Ranked = { item: Prepared; tier: Tier };
@@ -245,10 +309,13 @@ export function createSearch(findings: Finding[]): Search {
     const caseId = (options.caseId ?? "").trim().toUpperCase();
 
     const ranked: Ranked[] = [];
+    const facets: Facets = { types: zeroCounts(ALL_TYPES), flags: zeroCounts(FLAGS) };
+    // One pass: a record that MATCHES is counted in the facets, and ranked if it is a result.
     for (const item of prepared) {
-      if (!passesFilters(item.finding, options, caseId)) continue;
+      if (!passesCaseFilter(item.finding, caseId)) continue;
       if (!matchesAllTerms(item, query.terms)) continue;
-      ranked.push({ item, tier: tierOf(item, query) });
+      countInFacets(facets, item.finding, options);
+      if (isResult(item.finding, options)) ranked.push({ item, tier: tierOf(item, query) });
     }
     ranked.sort(compareRanked);
 
@@ -261,6 +328,6 @@ export function createSearch(findings: Finding[]): Search {
       entityRanges: highlightsOf(query.terms, item.entity),
       notesRanges: highlightsOf(query.terms, item.notes),
     }));
-    return { total: ranked.length, limit, offset, hits };
+    return { total: ranked.length, limit, offset, hits, facets };
   };
 }

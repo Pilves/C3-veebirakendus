@@ -1,5 +1,5 @@
 // Lookups over the normalised findings that are not a search: one record by id, and the
-// list of cases. The HTTP API and the MCP tools both use this store, so they cannot disagree.
+// list of cases, for the HTTP API and the MCP tools alike.
 // Everything is worked out once in createStore; the data never changes while running.
 
 import type { Finding, FindingType } from "./normalise.ts";
@@ -27,23 +27,19 @@ export type Store = {
 
 // ---------- by id ----------
 
-function addTo(index: Map<string, Finding[]>, name: string, finding: Finding): void {
-  const list = index.get(name);
-  if (list === undefined) index.set(name, [finding]);
-  else list.push(finding);
+// Both lookups are Maps, not plain objects: the lookup text comes from a URL, and on an
+// object a name like "__proto__" or "constructor" would find something that is not a finding.
+
+// A key belongs to exactly one finding.
+function indexByKey(findings: Finding[]): Map<string, Finding> {
+  return new Map(findings.map((finding): [string, Finding] => [finding.key, finding]));
 }
 
-// A Map, not a plain object: the lookup text comes from a URL, and on an object a name
-// like "__proto__" or "constructor" would find something that is not a finding.
-function indexByIdAndKey(findings: Finding[]): Map<string, Finding[]> {
-  const index = new Map<string, Finding[]>();
-  for (const finding of findings) {
-    addTo(index, finding.key, finding);
-    // Most findings have key === id and must not be listed twice. A missing id is ""
-    // and is not indexed: "" is not a name anyone can look a record up by.
-    if (finding.id !== finding.key && finding.id !== "") addTo(index, finding.id, finding);
-  }
-  return index;
+// An id can be shared by several findings. A missing id is "" and is not indexed: ""
+// is not a name anyone can look a record up by.
+function groupById(findings: Finding[]): Map<string, Finding[]> {
+  const withId = findings.filter((finding) => finding.id !== "");
+  return Map.groupBy(withId, (finding) => finding.id);
 }
 
 // ---------- cases ----------
@@ -72,7 +68,7 @@ function addToCase(summary: CaseSummary, finding: Finding): void {
   }
   summary.findings++;
   summary.types[finding.type]++;
-  // observedAt is always the same UTC ISO format, which compares correctly as text.
+  // Compared as text: see compareRanked in search/search.ts for why that is correct.
   const time = finding.observedAt;
   if (time === null) return;
   if (summary.firstObservedAt === null || time < summary.firstObservedAt) {
@@ -98,7 +94,7 @@ function summariseCases(findings: Finding[]): CaseList {
       addToCase(summary, finding);
     }
   }
-  // Plain comparison, not localeCompare: the order must not depend on the machine's locale.
+  // Not localeCompare, for the reason given at compareRanked in search/search.ts.
   const cases = [...byCaseId.values()].sort((a, b) => (a.caseId < b.caseId ? -1 : 1));
   return { cases, findingsWithoutCase };
 }
@@ -106,14 +102,20 @@ function summariseCases(findings: Finding[]): CaseList {
 // ---------- the store ----------
 
 export function createStore(findings: Finding[]): Store {
-  const byIdOrKey = indexByIdAndKey(findings);
+  const byKey = indexByKey(findings);
+  const byId = groupById(findings);
   const caseList = summariseCases(findings);
 
   return {
     // Always a list. An id shared by two unrelated records returns both, so the caller
     // sees the clash instead of the store silently picking one.
     findById(idOrKey: string): Finding[] {
-      return byIdOrKey.get(idOrKey.trim()) ?? [];
+      const name = idOrKey.trim();
+      const sameId = byId.get(name) ?? [];
+      const sameKey = byKey.get(name);
+      // Most findings have key === id and must not be listed twice.
+      if (sameKey === undefined || sameId.includes(sameKey)) return sameId;
+      return [sameKey, ...sameId];
     },
     listCases(): CaseList {
       return caseList;

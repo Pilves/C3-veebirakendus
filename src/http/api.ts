@@ -7,8 +7,8 @@
 
 import { Router } from "express";
 import type { ErrorRequestHandler, Request } from "express";
-import { VALID_TYPES } from "../data/normalise.ts";
-import type { Finding, FindingType } from "../data/normalise.ts";
+import { ALL_TYPES, FLAGS } from "../data/normalise.ts";
+import type { Finding, FindingType, Flag } from "../data/normalise.ts";
 import { publicFinding } from "../data/public.ts";
 import type { Store } from "../data/store.ts";
 import { MAX_LIMIT } from "../search/search.ts";
@@ -37,12 +37,21 @@ function textParam(query: Query, name: string): string | undefined {
 function typeParam(query: Query): FindingType | undefined {
   const value = textParam(query, "type");
   if (value === undefined) return undefined;
-  if (value === "unknown") return value;
-  const type = VALID_TYPES.find((valid) => valid === value);
+  const type = ALL_TYPES.find((valid) => valid === value);
   if (type === undefined) {
-    throw new BadRequest(`Parameter "type" must be one of: ${VALID_TYPES.join(", ")}, unknown`);
+    throw new BadRequest(`Parameter "type" must be one of: ${ALL_TYPES.join(", ")}`);
   }
   return type;
+}
+
+function flagParam(query: Query): Flag | undefined {
+  const value = textParam(query, "flag");
+  if (value === undefined) return undefined;
+  const flag = FLAGS.find((valid) => valid === value);
+  if (flag === undefined) {
+    throw new BadRequest(`Parameter "flag" must be one of: ${FLAGS.join(", ")}`);
+  }
+  return flag;
 }
 
 function duplicatesParam(query: Query): boolean {
@@ -95,6 +104,7 @@ function searchOptionsOf(request: Request): SearchOptions {
     query: queryParam(query),
     type: typeParam(query),
     caseId: textParam(query, "case"),
+    flag: flagParam(query),
     includeDuplicates: duplicatesParam(query),
     limit: limitParam(query),
     offset: wholeNumberParam(query, "offset", OFFSET_RULE),
@@ -110,9 +120,8 @@ function detailedFinding(finding: Finding) {
 
 // ---------- errors ----------
 
-// Four parameters mark this as an error handler for Express, so `next` stays even though
-// it is unused. The client only ever gets a fixed message or one written in this file:
-// no stack trace and no internal error text.
+// The client only ever gets a fixed message or one written in this file: no stack trace
+// and no internal error text. The unused `_next` has to stay: see handleError in server.ts.
 const handleError: ErrorRequestHandler = (error, _request, response, _next) => {
   if (error instanceof BadRequest) {
     response.status(400).json({ error: error.message });
@@ -160,10 +169,7 @@ export function createApiRouter(store: Store, search: Search): Router {
     response.set("Allow", "GET, HEAD").status(405).json({ error: "Method not allowed" });
   });
 
-  router.use((_request, response) => {
-    response.status(404).json({ error: "Not found" });
-  });
-
+  // No 404 here: any other path falls through to the server's JSON 404.
   router.use(handleError);
   return router;
 }

@@ -49,8 +49,8 @@ import {
   toolNameOf,
 } from "./protocol.ts";
 import type { Headers, JsonObject, Message, RequestId } from "./protocol.ts";
-import { createTools } from "./tools.ts";
-import type { Tools } from "./tools.ts";
+import { TOOL_DEFINITIONS, createCallTool } from "./tools.ts";
+import type { CallTool } from "./tools.ts";
 
 // The largest request body that is read. A real tools/call is a few hundred bytes; the
 // limit stops a client from making the server buffer and parse megabytes.
@@ -70,24 +70,24 @@ function asProtocolError(error: unknown): ProtocolError {
 
 // Step 12 and 13. tools, Error Handling: an "Unknown tool" is a protocol error, shown
 // there with code -32602; on HTTP that is a 400.
-function callTool(tools: Tools, headers: Headers, params: unknown): JsonObject {
+function toolResult(callTool: CallTool, headers: Headers, params: unknown): JsonObject {
   const name = toolNameOf(headers, params);
-  const run = tools.find(name);
-  if (run === undefined) throw invalidParams("unknown tool");
-  return run(toolArgumentsOf(params));
+  const result = callTool(name, toolArgumentsOf(params));
+  if (result === undefined) throw invalidParams("unknown tool");
+  return result;
 }
 
 // Step 11. The whole list of methods. Everything else is "Method not found", including
 // `initialize` (removed in this revision), `ping`, and `subscriptions/listen` (this
 // server announces no listChanged, so there is nothing to subscribe to).
-function dispatch(tools: Tools, headers: Headers, message: Message): JsonObject {
+function dispatch(callTool: CallTool, headers: Headers, message: Message): JsonObject {
   switch (message.method) {
     case "server/discover":
       return discoverResult();
     case "tools/list":
-      return listToolsResult(tools.definitions);
+      return listToolsResult(TOOL_DEFINITIONS);
     case "tools/call":
-      return callTool(tools, headers, message.params);
+      return toolResult(callTool, headers, message.params);
     default:
       throw methodNotFound();
   }
@@ -95,7 +95,7 @@ function dispatch(tools: Tools, headers: Headers, message: Message): JsonObject 
 
 // Mounted at /mcp by the server.
 export function createMcpRouter(store: Store, search: Search): Router {
-  const tools = createTools(store, search);
+  const callTool = createCallTool(store, search);
   const router = Router();
 
   // Steps 1-3, for every HTTP method, before any of the body is read.
@@ -129,15 +129,15 @@ export function createMcpRouter(store: Store, search: Search): Router {
         return;
       }
       checkRequest(request.headers, message);
-      const result = dispatch(tools, request.headers, message);
+      const result = dispatch(callTool, request.headers, message);
       response.json(resultResponse(message.id, result));
     } catch (error) {
       sendError(response, readableId(body), asProtocolError(error));
     }
   };
 
-  // Step 4, the failures: the body parser passes its errors here.
-  // Four parameters mark this as an error handler for Express, so `next` stays.
+  // Step 4, the failures: the body parser passes its errors here. The unused `_next`
+  // has to stay: see handleError in server.ts.
   const handleBodyError: ErrorRequestHandler = (error, _request, response, _next) => {
     const failure = bodyParserError(error);
     if (failure.status === 500) console.error(error);

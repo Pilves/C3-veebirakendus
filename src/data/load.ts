@@ -3,6 +3,7 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { valueOr } from "../env.ts";
 import { normaliseFindings } from "./normalise.ts";
 import type { Finding } from "./normalise.ts";
 
@@ -12,7 +13,10 @@ const DEFAULT_PATH = fileURLToPath(new URL("../../data/findings.json", import.me
 
 // Throws on a missing file, broken JSON or an unexpected top level. That is on purpose:
 // the server must fail at boot rather than run and answer every search with nothing.
-export function loadFindings(path: string = process.env.FINDINGS_PATH ?? DEFAULT_PATH): Finding[] {
+// An empty FINDINGS_PATH= means the default file, like every other variable (see valueOr).
+export function loadFindings(
+  path: string = valueOr(process.env.FINDINGS_PATH, DEFAULT_PATH),
+): Finding[] {
   const data: unknown = JSON.parse(readFileSync(path, "utf8"));
   if (typeof data !== "object" || data === null || !("findings" in data)) {
     throw new Error(`${path}: expected an object with a "findings" array`);
