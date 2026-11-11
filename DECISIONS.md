@@ -87,15 +87,25 @@ merge. Substring matching also hits inside words.
 Not done, on purpose: cross-language search, stemming for Estonian inflection,
 fuzzy matching.
 
-The task names entity and notes as what is searched. A finding id is also
-found, but only as a whole word: an analyst who pastes `F-10401` into the one
-search field expects that finding, and as a substring `10` would be in hundreds
-of ids. Cases are reached through the case filter.
+The task names entity and notes as what is searched. The one search field also
+takes everything else a finding shows, because an analyst pastes whatever they
+are holding into it:
+
+- The source address is matched like text, anywhere in it.
+- An id, a key, a case id and a type are matched only as a whole word. As a
+  substring `10` would be in hundreds of ids and `c-1` in every case.
+
+A row shows why it is there: the match is highlighted in the id, case or type,
+and the source is added to the row when the match is in it.
+
+Cost: a word that is also a type, such as `email`, brings every finding of
+that type along with the notes that mention it. They rank below every match in
+an entity.
 
 ## 10. Ranking: where the match is, then newest first
 
 Exact entity or id, entity starts with the query, a word is in the entity,
-notes only. Inside a tier the newest finding comes first, then key order, so the
+everything else (notes, source, case id, type). Inside a tier the newest finding comes first, then key order, so the
 same query always gives the same list.
 
 ## 11. Re-imports are hidden from results by default

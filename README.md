@@ -90,9 +90,11 @@ The reasoning behind each choice, with what it costs, is in
 - **Normalise once, never destroy.** Every record keeps its raw value, gets cleaned
   fields beside it and a list of flags naming what was wrong.
 - **Search is a folded substring match.** Text and query are lowercased and stripped of
-  diacritics; several words must all match. A word that is a whole finding id also
-  matches that finding. Results are ranked by where the match is (entity or id equals
-  the query, entity starts with it, contains a word, notes only) and then newest first.
+  diacritics; several words must all match, each anywhere in the entity, the notes or
+  the source address. A word that is a whole id, case id or type matches too, so
+  `C-117 wallet` works. Results are ranked by where the match is (entity or id equals
+  the query, entity starts with it, contains a word, anything else) and then newest
+  first.
 - **Highlights are positions, not markup.** The server returns plain text and the
   offsets to highlight. No HTML is built anywhere on the server.
 - **Express 5** is the only runtime dependency.

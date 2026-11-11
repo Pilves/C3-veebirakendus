@@ -403,8 +403,52 @@ describe("filters", () => {
     assert.deepEqual(keysOf(search({ query: "one", caseId: "C-1", type: "domain" })), ["T-1"]);
   });
 
-  test("the query does not search case ids", () => {
-    assert.equal(search({ query: "C-2" }).total, 0);
+});
+
+describe("case ids, types and sources", () => {
+  const search = searchOf([
+    { id: "T-1", caseId: "C-2", entity: "one.test", type: "domain" },
+    { id: "T-2", caseId: ["C-2", "C-30"], entity: "192.0.2.1", type: "ip" },
+    { id: "T-3", caseId: "C-30", entity: "c-2", type: "alias", sourceUrl: "https://Forum.test/9" },
+    { id: "T-4", caseId: "C-9", entity: "four.test", sourceUrl: "javascript:forum" },
+  ]);
+
+  test("a whole case id finds the findings of the case, below an entity of that name", () => {
+    const result = search({ query: "c-2" });
+    assert.deepEqual(keysOf(result), ["T-3", "T-1", "T-2"]);
+    assert.deepEqual(result.hits.map((hit) => hit.tier), [0, 3, 3]);
+    assert.deepEqual(result.hits.map((hit) => hit.matchedLabels), [[], ["case"], ["case"]]);
+  });
+
+  test("part of a case id finds nothing", () => {
+    assert.equal(search({ query: "C-3" }).total, 0);
+    assert.equal(search({ query: "30" }).total, 0);
+  });
+
+  test("a whole type finds the findings of that type", () => {
+    const result = search({ query: "IP" });
+    assert.deepEqual(keysOf(result), ["T-2"]);
+    assert.deepEqual(result.hits[0]?.matchedLabels, ["type"]);
+  });
+
+  test("part of a source address finds the finding and says where", () => {
+    const hit = search({ query: "forum" }).hits[0];
+    assert.deepEqual(keysOf(search({ query: "forum" })), ["T-3"]);
+    assert.deepEqual(slicesOf(hit?.finding.sourceUrl ?? "", hit?.sourceRanges ?? []), ["Forum"]);
+  });
+
+  test("a source that is not a link is not searched", () => {
+    assert.equal(search({ query: "javascript" }).total, 0);
+  });
+
+  test("words may each match in a different field", () => {
+    assert.deepEqual(keysOf(search({ query: "c-30 ip" })), ["T-2"]);
+    assert.deepEqual(search({ query: "c-30 ip" }).hits[0]?.matchedLabels, ["case", "type"]);
+    assert.deepEqual(search({ query: "T-1 domain c-2" }).hits[0]?.matchedLabels, [
+      "id",
+      "case",
+      "type",
+    ]);
   });
 });
 
@@ -892,9 +936,15 @@ describe("real dataset", () => {
       for (const hit of result.hits) {
         assertRangesFoldToTerms(hit.finding.entity, hit.entityRanges, terms);
         assertRangesFoldToTerms(hit.finding.notes ?? "", hit.notesRanges, terms);
+        assertRangesFoldToTerms(hit.finding.sourceUrl ?? "", hit.sourceRanges, terms);
         rangesSeen += hit.entityRanges.length + hit.notesRanges.length;
         // A hit always shows why it matched.
-        assert.ok(hit.entityRanges.length + hit.notesRanges.length > 0, hit.finding.key);
+        const shown =
+          hit.entityRanges.length +
+          hit.notesRanges.length +
+          hit.sourceRanges.length +
+          hit.matchedLabels.length;
+        assert.ok(shown > 0, hit.finding.key);
       }
     }
     assert.ok(rangesSeen > 100, "the sample queries should exercise many ranges");

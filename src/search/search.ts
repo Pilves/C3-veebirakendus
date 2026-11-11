@@ -13,7 +13,8 @@ import type { Finding, FindingType, Flag } from "../data/normalise.ts";
 export type HighlightRange = { start: number; end: number };
 
 // 0: entity, id or key equals the query, 1: entity starts with it, 2: some term is in the
-// entity, 3: everything else (matched in the notes only, or an empty query).
+// entity, 3: everything else (matched in the notes, the source, a case id or the type
+// only, or an empty query).
 export type Tier = 0 | 1 | 2 | 3;
 
 export type SearchOptions = {
@@ -31,7 +32,13 @@ export type SearchHit = {
   tier: Tier;
   entityRanges: HighlightRange[]; // offsets into finding.entity
   notesRanges: HighlightRange[]; // offsets into finding.notes; empty when notes is null
+  sourceRanges: HighlightRange[]; // offsets into finding.sourceUrl; empty when it is null
+  // The short fields a query word matched as a whole. They cannot be shown by ranges:
+  // a key is matched but the id is displayed, and the cases are a list.
+  matchedLabels: Label[];
 };
+
+export type Label = "id" | "case" | "type";
 
 // How many results each filter button would give, so the UI can show live counts.
 // Every type and every flag is present, with 0 when it would give nothing.
@@ -130,10 +137,13 @@ type Prepared = {
   // be an exact match for its own text.
   entityPhrase: string;
   notes: FoldedText;
-  // The folded id and key. A record that shares its id has a key of its own ("F-1.2");
-  // otherwise the two are the same text.
-  names: string[];
+  source: FoldedText;
+  // The folded short fields, each matched only as a whole word of the query. For "id"
+  // that is the id and the key: a record that shares its id has a key of its own.
+  labels: { [label in Label]: string[] };
 };
+
+const LABELS: Label[] = ["id", "case", "type"];
 
 function prepare(finding: Finding): Prepared {
   const entity = foldText(finding.entity);
@@ -142,23 +152,34 @@ function prepare(finding: Finding): Prepared {
     entity,
     entityPhrase: wordsOf(entity.text).join(" "),
     notes: foldText(finding.notes ?? ""),
-    names: [foldText(finding.id).text, foldText(finding.key).text],
+    source: foldText(finding.sourceUrl ?? ""),
+    labels: {
+      id: [foldText(finding.id).text, foldText(finding.key).text],
+      case: finding.caseIds.map((caseId) => foldText(caseId).text),
+      type: [finding.type],
+    },
   };
 }
 
-// An id or key matches only as a whole. As a substring "10" would be in hundreds of ids
-// and "f-1" in all of them, and every search for a number would drown in them.
-function isNameOf(item: Prepared, term: string): boolean {
-  return item.names.includes(term);
+// An id, a case id and a type match only as a whole. As a substring "10" would be in
+// hundreds of ids and "c-1" in every case, and a search for a number would drown in them.
+function labelsMatching(item: Prepared, terms: string[]): Label[] {
+  return LABELS.filter((label) => terms.some((term) => item.labels[label].includes(term)));
+}
+
+function isInText(item: Prepared, term: string): boolean {
+  return (
+    item.entity.text.includes(term) ||
+    item.notes.text.includes(term) ||
+    item.source.text.includes(term)
+  );
 }
 
 // AND: every term must be somewhere, but each term may be in a different field.
 // With no terms the loop never runs and everything matches: that is the browse mode.
 function matchesAllTerms(item: Prepared, terms: string[]): boolean {
   for (const term of terms) {
-    const found =
-      item.entity.text.includes(term) || item.notes.text.includes(term) || isNameOf(item, term);
-    if (!found) return false;
+    if (!isInText(item, term) && labelsMatching(item, [term]).length === 0) return false;
   }
   return true;
 }
@@ -167,7 +188,7 @@ function matchesAllTerms(item: Prepared, terms: string[]): boolean {
 function tierOf(item: Prepared, query: ParsedQuery): Tier {
   // Checked first because every string starts with "", which would make browse tier 1.
   if (query.terms.length === 0) return 3;
-  if (item.entityPhrase === query.phrase || isNameOf(item, query.phrase)) return 0;
+  if (item.entityPhrase === query.phrase || item.labels.id.includes(query.phrase)) return 0;
   if (item.entityPhrase.startsWith(query.phrase)) return 1;
   if (query.terms.some((term) => item.entity.text.includes(term))) return 2;
   return 3;
@@ -339,6 +360,8 @@ export function createSearch(findings: Finding[]): Search {
       tier,
       entityRanges: highlightsOf(query.terms, item.entity),
       notesRanges: highlightsOf(query.terms, item.notes),
+      sourceRanges: highlightsOf(query.terms, item.source),
+      matchedLabels: labelsMatching(item, query.terms),
     }));
     return { total: ranked.length, limit, offset, hits, facets };
   };

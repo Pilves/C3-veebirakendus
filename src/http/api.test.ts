@@ -94,7 +94,7 @@ describe("GET /api/findings", () => {
   test("a hit holds exactly the public fields of a finding, without the raw record", async () => {
     const reply = await request("/api/findings");
     for (const hit of reply.body.hits) {
-      assert.deepEqual(Object.keys(hit), ["finding", "tier", "entityRanges", "notesRanges"]);
+      assert.deepEqual(Object.keys(hit), ["finding", "tier", "entityRanges", "notesRanges", "sourceRanges", "matchedLabels"]);
       assert.deepEqual(Object.keys(hit.finding), PUBLIC_KEYS);
     }
   });

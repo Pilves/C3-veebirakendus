@@ -541,10 +541,10 @@ function noResultNodes() {
     nodes.push(element("p", undefined, "No finding passes these filters."));
   } else {
     const where = hasFilters() ? " with these filters" : "";
-    const line = element("p", undefined, "No entity, note or id matches ");
+    const line = element("p", undefined, "Nothing matches ");
     line.append(element("strong", undefined, query), `${where}.`);
-    const advice = "Every word must be found in the entity or the notes, or be a whole "
-      + "finding id. Try fewer words, or one word without its ending.";
+    const advice = "Every word must be found in the entity, the notes or the source, or "
+      + "be a whole id, case or type. Try fewer words, or one word without its ending.";
     nodes.push(line, element("p", "muted", advice));
   }
   const actions = element("p", "actions");
@@ -589,7 +589,10 @@ function ledgerRow(hit) {
     time.dateTime = finding.observedAt;
   }
   const id = finding.id === "" ? element("span", undefined, "no id") : dataText(finding.id);
-  meta.append(element("span", undefined, finding.type), dataText(cases), time, id);
+  const type = element("span", undefined, finding.type);
+  const caseList = dataText(cases);
+  markLabels(hit, { type, case: caseList, id });
+  meta.append(type, caseList, time, id);
 
   const more = element("div", "row-more");
   if (finding.notes !== null) {
@@ -597,11 +600,30 @@ function ledgerRow(hit) {
     notes.append(highlighted(finding.notes, hit.notesRanges));
     more.append(notes);
   }
+  // The source is on the row only when it is why the row is here. Text, not a link: the
+  // link is made in the record panel, where the address is checked first.
+  if (finding.sourceUrl !== null && hit.sourceRanges?.length > 0) {
+    const source = evidence(element("p", "data"));
+    source.append(highlighted(finding.sourceUrl, hit.sourceRanges));
+    more.append(source);
+  }
   if (finding.flags.length > 0) more.append(flagList(finding.flags));
 
   row.append(open, meta, more);
   rowsByKey.set(finding.key, row);
   return row;
+}
+
+// A type, case or id that a word of the query named as a whole is marked like any other
+// match. `cells` maps the server's label names to the row's nodes for them.
+function markLabels(hit, cells) {
+  if (!Array.isArray(hit.matchedLabels)) return;
+  for (const label of hit.matchedLabels) {
+    const cell = Object.hasOwn(cells, label) ? cells[label] : undefined;
+    if (cell === undefined) continue;
+    const mark = element("mark", undefined, cell.textContent);
+    cell.replaceChildren(mark);
+  }
 }
 
 // A flag this file does not know yet is shown by its name instead of being dropped.
