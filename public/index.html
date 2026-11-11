@@ -2,81 +2,140 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- viewport-fit=cover lets the page reach under a phone's notch; styles.css pads the
+       content back with env(safe-area-inset-*). Zoom is never disabled. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f6f8">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#101216">
   <title>Findings search</title>
   <!-- The server's Content-Security-Policy allows only same-origin files: no inline
        script, no inline style, nothing from another site. -->
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
-  <header>
-    <h1>Findings search</h1>
+  <noscript>
+    <p class="notice">This page needs JavaScript to search the findings. Nothing below
+      works without it.</p>
+  </noscript>
+
+  <header class="band" id="band">
+    <h1 class="product">Findings search</h1>
     <!-- Not a <form>: nothing is ever submitted to the server as a form (the policy has
          form-action 'none'). app.js listens to the controls and calls the API itself. -->
-    <div class="controls" role="search">
-      <div class="field field-query">
-        <label for="query">Search in entity and notes</label>
-        <input id="query" type="search" maxlength="200" autocomplete="off" spellcheck="false">
+    <div class="finder" role="search" aria-label="Findings">
+      <div class="query">
+        <label class="visually-hidden" for="query">Search entity and notes, in Estonian
+          or English, with or without diacritics</label>
+        <input id="query" type="search" maxlength="200" autocomplete="off"
+          autocapitalize="none" spellcheck="false" enterkeyhint="search" autofocus
+          placeholder="Search entity and notes: Estonian or English, diacritics optional">
+        <kbd class="query-key" aria-hidden="true">/</kbd>
       </div>
-      <div class="field">
-        <label for="type">Type</label>
-        <select id="type">
-          <option value="">All types</option>
-          <option value="domain">domain</option>
-          <option value="ip">ip</option>
-          <option value="email">email</option>
-          <option value="handle">handle</option>
-          <option value="alias">alias</option>
-          <option value="wallet">wallet</option>
-          <option value="unknown">unknown</option>
-        </select>
+
+      <div class="filter">
+        <span class="filter-label" id="type-label">Type</span>
+        <div class="filter-body">
+          <div class="filter-options" id="types" role="group" aria-labelledby="type-label">
+            <button type="button" class="toggle" data-value="" aria-pressed="true">All
+              <span class="count"></span></button>
+            <button type="button" class="toggle" data-value="domain"
+              aria-pressed="false">domain <span class="count"></span></button>
+            <button type="button" class="toggle" data-value="ip"
+              aria-pressed="false">ip <span class="count"></span></button>
+            <button type="button" class="toggle" data-value="email"
+              aria-pressed="false">email <span class="count"></span></button>
+            <button type="button" class="toggle" data-value="handle"
+              aria-pressed="false">handle <span class="count"></span></button>
+            <button type="button" class="toggle" data-value="alias"
+              aria-pressed="false">alias <span class="count"></span></button>
+            <button type="button" class="toggle" data-value="wallet"
+              aria-pressed="false">wallet <span class="count"></span></button>
+            <button type="button" class="toggle" data-value="unknown"
+              aria-pressed="false">unknown <span class="count"></span></button>
+          </div>
+        </div>
       </div>
-      <div class="field">
-        <label for="case">Case</label>
-        <select id="case">
-          <option value="">All cases</option>
-        </select>
+
+      <div class="filter">
+        <label class="filter-label" for="case">Case</label>
+        <div class="filter-body">
+          <select id="case">
+            <option value="">All cases</option>
+          </select>
+          <label class="check"><input id="duplicates" type="checkbox"> Include
+            re-imports</label>
+          <span class="problem" id="case-error" hidden>The list of cases could not be
+            loaded; the search still works.</span>
+        </div>
       </div>
-      <div class="field field-check">
-        <input id="duplicates" type="checkbox">
-        <label for="duplicates">Include re-imported duplicates</label>
+
+      <div class="filter">
+        <span class="filter-label" id="flag-label">Data quality</span>
+        <div class="filter-body">
+          <!-- app.js adds one button per data-quality flag and shows those that occur. -->
+          <div class="filter-options" id="flags" role="group" aria-labelledby="flag-label">
+            <span class="filter-none" id="flags-none" hidden>no flags in these results</span>
+          </div>
+        </div>
       </div>
     </div>
-    <p id="case-error" class="error" hidden>The list of cases could not be loaded.</p>
   </header>
 
-  <main>
-    <section id="results" aria-labelledby="results-heading">
-      <h2 id="results-heading">Results</h2>
-      <p id="summary" role="status" aria-live="polite">Loading…</p>
-      <div id="search-error" class="error" role="alert" hidden>
-        <p id="search-error-text"></p>
-        <button id="retry" type="button">Try again</button>
+  <main class="workspace">
+    <section class="results" id="results" aria-labelledby="results-heading">
+      <div class="summary">
+        <!-- Takes the focus after paging, so the keyboard user's place is the top of the
+             new page and not a button that has just been disabled. -->
+        <h2 id="results-heading" tabindex="-1">Findings</h2>
+        <p class="summary-detail" id="summary-detail"></p>
+        <span class="summary-busy" aria-hidden="true">Searching</span>
       </div>
-      <div id="empty" hidden>
-        <p>No findings match this search and these filters.</p>
-        <button id="open-as-id" type="button" hidden></button>
-      </div>
-      <ul id="hits"></ul>
-      <nav id="pager" aria-label="Result pages" hidden>
-        <button id="previous" type="button">Previous</button>
-        <span id="range"></span>
-        <button id="next" type="button">Next</button>
+      <div class="message" id="message" hidden></div>
+      <ol class="ledger" id="rows" role="list"></ol>
+      <nav class="pager" id="pager" aria-label="Result pages" hidden>
+        <button class="button" id="previous" type="button">Previous</button>
+        <span class="pager-range" id="range"></span>
+        <button class="button" id="next" type="button">Next</button>
       </nav>
-      <p id="zone-note" class="muted"></p>
     </section>
 
-    <aside id="detail" aria-labelledby="detail-heading">
-      <h2 id="detail-heading" tabindex="-1">Finding details</h2>
-      <button id="close-detail" type="button" hidden>Back to results</button>
-      <div id="detail-body">
-        <p class="muted">Select a finding to see its details.</p>
+    <aside class="record" id="record" aria-label="Record">
+      <div class="record-bar" id="record-bar" hidden>
+        <p class="record-status" id="record-status" role="status" aria-live="polite"></p>
+        <button class="button" id="close-record" type="button">Close
+          <kbd aria-hidden="true">Esc</kbd></button>
+      </div>
+      <div class="record-view">
+        <div class="record-empty" id="record-empty">
+          <h2>No record open</h2>
+          <p>Open a finding to read it here, beside the list, without losing your place.</p>
+          <dl class="keys">
+            <div><dt><kbd>/</kbd></dt><dd>Go to the search field</dd></div>
+            <div><dt><kbd>Down</kbd> <kbd>Up</kbd> or <kbd>j</kbd> <kbd>k</kbd></dt>
+              <dd>Move through the findings</dd></div>
+            <div><dt><kbd>Enter</kbd></dt><dd>Open the finding</dd></div>
+            <div><dt><kbd>Esc</kbd></dt><dd>Close the record, or clear the search</dd></div>
+          </dl>
+        </div>
+        <div id="record-content" hidden></div>
       </div>
     </aside>
+
+    <!-- Read out by screen readers once a search has settled; see announceLater in
+         app.js for why this is not the visible summary line itself. -->
+    <p class="visually-hidden" id="announcer" role="status" aria-live="polite"></p>
   </main>
 
-  <noscript><p class="error">This page needs JavaScript to search the findings.</p></noscript>
+  <footer class="footer">
+    <ul class="shortcuts" aria-label="Keyboard shortcuts">
+      <li><kbd>/</kbd> search</li>
+      <li><kbd>Down</kbd> <kbd>Up</kbd> or <kbd>j</kbd> <kbd>k</kbd> move</li>
+      <li><kbd>Enter</kbd> open</li>
+      <li><kbd>Esc</kbd> close the record or clear the search</li>
+    </ul>
+  </footer>
 </body>
 </html>

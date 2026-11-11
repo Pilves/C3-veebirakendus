@@ -1,36 +1,104 @@
-/* Plain and dense: an analyst scans many rows. Colours are variables so that the dark
-   scheme only has to change the values, not the rules. */
+/* An evidence ledger: one ruled list, hairlines instead of boxes, monospace for the
+   values an analyst cites and nowhere else. Every colour, space and duration has a name
+   in :root, so the dark scheme changes values and never rules.
+
+   Sections: tokens, base, shared pieces, top band, filters, layout, results, record
+   panel, footer, narrow screens, touch, motion, forced colours. */
+
+/* ---------- tokens ---------- */
 
 :root {
   color-scheme: light dark;
-  --background: #ffffff;
-  --panel: #f4f5f7;
-  --text: #1b1d21;
-  --muted: #575c66;
-  --border: #b9bec7;
-  --accent: #0b50c5;
-  --error: #a8201a;
-  --mark-background: #ffdf5d;
-  --mark-text: #000000;
-  --selected: #e3ecfb;
+
+  /* Colour roles. Text on its ground is at least 4.5:1, control edges at least 3:1. */
+  --ground: #f5f6f8; /* the desk: page background */
+  --surface: #ffffff; /* paper: the record sheet and the controls */
+  --ink: #14171c;
+  --ink-muted: #505762;
+  --rule: #d5d9e0; /* hairlines between records */
+  --edge: #767e8b; /* boundaries of controls */
+  --hover: #eceef2;
+  --press: #e0e3e9;
+  --accent: #2336c0; /* ultramarine: selection, focus and links only */
+  --accent-ink: #1b2a9c;
+  --accent-ground: #e2e7fb;
+  --mark-ground: #ffe35a; /* highlighter; always paired with an underline */
+  --mark-ink: #14171c;
+  --mark-rule: #14171c;
+  --flag-ink: #7a4800; /* amber: data-quality flags */
+  --flag-edge: #b0731a;
+  --danger: #a1201a;
+  --select-ground: #2336c0;
+  --select-ink: #ffffff;
+  --tap: rgb(35 54 192 / 0.14);
+  --shadow: 0 12px 28px -14px rgb(20 23 28 / 0.32);
+
+  /* Type. Sans for the interface, monospace for data only. */
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --font-data: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  --text-xs: 0.75rem;
+  --text-s: 0.8125rem;
+  --text-m: 0.875rem;
+  --text-l: 1.0625rem;
+
+  /* Space and size. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --gutter: 1.5rem; /* page margin */
+  --label-column: 8.5rem; /* product name and filter labels share one left column */
+  --control: 1.875rem; /* height of buttons and the select */
+  --field: 2.5rem; /* height of the search field */
+  --footer: 2.25rem;
+  /* Where the record panel starts while the top band is on screen: the height of the
+     band on a wide window, with its two reserved lines of data-quality buttons. */
+  --band: 14.5rem;
+  --radius: 4px;
+
+  /* Motion. Used only inside the reduced-motion guard at the end of this file. */
+  --press-time: 120ms;
+  --pulse-time: 240ms;
+  --open-time: 220ms;
+  --close-time: 176ms; /* leaving is about a fifth quicker than arriving */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #15171b;
-    --panel: #1f2228;
-    --text: #e7e9ec;
-    --muted: #a9afb9;
-    --border: #4a505a;
-    --accent: #8fb8ff;
-    --error: #ff9a8f;
-    --mark-background: #e9b93a;
-    --mark-text: #000000;
-    --selected: #23324d;
+    --ground: #101216;
+    --surface: #171a20;
+    --ink: #e8eaee;
+    --ink-muted: #a3aab5;
+    --rule: #2b3038;
+    --edge: #6f7785;
+    --hover: #1b1f26;
+    --press: #242932;
+    --accent: #a6b4ff;
+    --accent-ink: #c9d1ff;
+    --accent-ground: #1e2552;
+    /* A bright yellow block glares on a dark page. The ground is dimmed and the
+       underline carries the highlighter yellow instead. */
+    --mark-ground: #5a4a05;
+    --mark-ink: #fff4bf;
+    --mark-rule: #f2d34b;
+    --flag-ink: #f0b756;
+    --flag-edge: #9a6f24;
+    --danger: #ff9d92;
+    --select-ground: #a6b4ff;
+    --select-ink: #101216;
+    --tap: rgb(166 180 255 / 0.18);
+    --shadow: 0 12px 28px -14px rgb(0 0 0 / 0.8);
   }
 }
 
-* {
+/* ---------- base ---------- */
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -39,311 +107,1046 @@
   display: none !important;
 }
 
+html {
+  background: var(--ground);
+  color: var(--ink);
+  accent-color: var(--accent);
+  caret-color: var(--accent);
+  scrollbar-color: var(--edge) transparent;
+  /* Room for the scrollbar from the start, so the page does not jump sideways when the
+     first results make it taller than the window. */
+  scrollbar-gutter: stable;
+  /* A row that scrolls into view on focus stops clear of the sticky footer. */
+  scroll-padding-block: var(--space-3) calc(var(--footer) + var(--space-3));
+  /* No font inflation when a phone is turned sideways. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: var(--tap);
+}
+
 body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
-  padding: 0.75rem 1rem 2rem;
-  background: var(--background);
-  color: var(--text);
-  font: 0.9375rem/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+  font: var(--text-m) / 1.45 var(--font-ui);
   /* Entities and notes can be one very long word (a wallet, a URL). Without this they
      would push the page wider than the screen. */
   overflow-wrap: anywhere;
 }
 
-h1 {
-  margin: 0 0 0.5rem;
-  font-size: 1.5rem;
+::selection {
+  background: var(--select-ground);
+  color: var(--select-ink);
 }
 
-h2 {
-  margin: 0 0 0.5rem;
-  font-size: 1.05rem;
-}
-
-h3 {
-  margin: 0 0 0.4rem;
-  font-size: 1rem;
-}
-
-h4 {
-  margin: 0.6rem 0 0.3rem;
-  font-size: 0.95rem;
-}
-
-p {
-  margin: 0 0 0.5rem;
+/* One focus ring for everything that can take the keyboard focus. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 a {
   color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
 }
 
-/* One focus style for everything that can take the keyboard focus. */
-:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
+p {
+  margin: 0;
 }
 
-button,
-input,
-select {
-  font: inherit;
-  color: inherit;
-}
+/* ---------- shared pieces ---------- */
 
-button,
-select,
-input[type="search"] {
-  padding: 0.3rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--panel);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:disabled {
-  color: var(--muted);
-  cursor: default;
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .muted {
-  color: var(--muted);
+  color: var(--ink-muted);
 }
 
-.error {
-  color: var(--error);
+.problem {
+  color: var(--danger);
 }
 
 .notice {
-  padding: 0.4rem 0.6rem;
-  border: 1px solid var(--error);
+  margin: var(--space-4) var(--gutter);
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  color: var(--danger);
 }
 
-mark {
-  padding: 0 1px;
-  background: var(--mark-background);
-  color: var(--mark-text);
+/* Values an analyst may cite: exact, monospaced, never translated or reflowed. */
+.data {
+  font-family: var(--font-data);
+  font-size: 0.93em;
 }
 
-/* ---------- search box and filters ---------- */
-
-.controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 1rem;
-  align-items: end;
-  margin-bottom: 0.5rem;
-}
-
-.field {
+/* Lines of a value stacked under each other. */
+.lines {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  align-items: flex-start;
+  gap: 2px;
 }
 
-.field label {
-  font-size: 0.85rem;
-  color: var(--muted);
+/* A match. The underline is what marks it; the colour only helps, so a match is still
+   visible in forced colours, in greyscale and to an eye that does not see yellow. */
+mark {
+  background: var(--mark-ground);
+  color: var(--mark-ink);
+  text-decoration: underline 2px var(--mark-rule);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 0.18em;
 }
 
-.field-query {
-  flex: 1 1 16rem;
+kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0 0.35em;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--ink-muted);
+  font: 500 var(--text-xs) / 1.5 var(--font-ui);
+  text-align: center;
 }
 
-.field-check {
-  flex-direction: row;
+.button,
+.toggle,
+select,
+.query input {
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.button,
+.toggle {
+  display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding-bottom: 0.3rem;
+  gap: var(--space-2);
+  min-height: var(--control);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-s);
+  line-height: 1.25;
+  text-align: start;
+  cursor: pointer;
+  /* No double-tap zoom on a control, so a tap acts at once; and a long press does not
+     select the label as if it were text. */
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
-.field-check label {
-  font-size: inherit;
+.button:active:not(:disabled),
+.toggle:active {
+  background: var(--press);
+}
+
+.button:disabled {
+  border-color: var(--rule);
+  color: var(--ink-muted);
+  cursor: default;
+}
+
+/* A filter button: a label and a count. Pressed is a tinted ground and a doubled edge,
+   so the state does not rest on colour alone. */
+.toggle {
+  gap: 0.375rem;
+  padding-inline: 0.625rem;
+  white-space: nowrap;
+}
+
+.toggle[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-ground);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--accent-ink);
+}
+
+/* A type or flag that would give nothing: still in its place, so the row never jumps. */
+.toggle.is-empty {
+  color: var(--ink-muted);
+}
+
+/* Counts keep their width as they change: tabular numerals in a reserved space, sized
+   for the numbers this register holds (a flag marks a handful of records, a type a few
+   hundred, "All" a few thousand). */
+.count {
+  min-width: 2ch;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+#types .count {
+  min-width: 3ch;
+}
+
+#types [data-value=""] .count {
+  min-width: 4ch;
+}
+
+.toggle[aria-pressed="true"] .count {
   color: inherit;
 }
 
-/* ---------- two columns: results and detail ---------- */
-
-main {
-  display: grid;
-  /* minmax(0, ...) lets a column shrink below its longest word instead of overflowing. */
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: 1rem;
-  align-items: start;
-  margin-top: 0.75rem;
+/* A data-quality flag on a record: an amber outline, never a filled badge. */
+.flag {
+  display: inline-block;
+  padding: 0 0.4em;
+  border: 1px solid var(--flag-edge);
+  border-radius: 3px;
+  color: var(--flag-ink);
+  font-size: var(--text-xs);
+  line-height: 1.5;
 }
 
-#detail {
-  /* Stays in view while the analyst scrolls down a long result list. */
-  position: sticky;
-  top: 0.5rem;
-  max-height: calc(100vh - 1rem);
-  overflow-y: auto;
-  padding: 0.6rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--panel);
-}
-
-/* ---------- result list ---------- */
-
-#hits {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  border-top: 1px solid var(--border);
-}
-
-#hits li {
-  padding: 0.35rem 0.5rem;
-  border-bottom: 1px solid var(--border);
-  border-left: 4px solid transparent;
-}
-
-#hits li.selected {
-  border-left-color: var(--accent);
-  background: var(--selected);
-}
-
-.hit-head {
+.actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.15rem 0.75rem;
-  align-items: baseline;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
-/* The entity is the control that opens the finding. It is a real button, styled like
-   text so that a full list does not look like fifty buttons. */
-button.entity {
+.actions:empty {
+  display: none;
+}
+
+/* ---------- top band: product name and search field ---------- */
+
+.band {
+  display: grid;
+  grid-template-columns: var(--label-column) minmax(0, 1fr);
+  padding: var(--space-4) var(--gutter) var(--space-3);
+  border-bottom: 1px solid var(--rule);
+}
+
+/* The name sits in the first cell of the grid that the search area below also uses, so
+   it lines up with the filter labels. z-index keeps it above that area's empty cell. */
+.product {
+  position: relative;
+  z-index: 1;
+  grid-area: 1 / 1;
+  align-self: start;
+  margin: 0;
+  font-size: var(--text-m);
+  font-weight: 650;
+  line-height: var(--field);
+}
+
+.finder {
+  display: grid;
+  grid-area: 1 / 1 / auto / -1;
+  grid-template-columns: subgrid;
+  row-gap: var(--space-2);
+}
+
+.query {
+  position: relative;
+  grid-column: 2;
+  max-width: 54rem;
+  margin-bottom: var(--space-1);
+}
+
+.query input {
+  width: 100%;
+  height: var(--field);
+  /* The right padding is the room for the "/" hint. */
+  padding: 0 2.5rem 0 var(--space-3);
+  /* 1rem: large enough to read at a glance, and iOS zooms the page on anything smaller. */
+  font-size: 1rem;
+  appearance: none;
+}
+
+.query input::placeholder {
+  color: var(--ink-muted);
+  opacity: 1;
+}
+
+.query-key {
+  position: absolute;
+  top: 50%;
+  right: var(--space-3);
+  translate: 0 -50%;
+}
+
+/* The hint says how to get here; once here it is noise. */
+.query:focus-within .query-key {
+  visibility: hidden;
+}
+
+/* ---------- filters ---------- */
+
+.filter {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: start;
+}
+
+.filter-label {
+  color: var(--ink-muted);
+  font-size: var(--text-s);
+  line-height: var(--control);
+}
+
+.filter-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2) var(--space-4);
+  min-width: 0;
+}
+
+.filter-options {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  /* Lines of buttons keep their own height when the row is taller than they need. */
+  align-content: flex-start;
+  gap: 0.375rem;
+  min-width: 0;
+  /* Holds the row open while the flag buttons are not there yet. */
+  min-height: var(--control);
+}
+
+.filter-none {
+  color: var(--ink-muted);
+  font-size: var(--text-s);
+  line-height: var(--control);
+}
+
+.check {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control);
+  font-size: var(--text-s);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.check input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+}
+
+select {
+  /* A fixed width: the select does not grow when the list of cases arrives. */
+  width: 11rem;
+  max-width: 100%;
+  height: var(--control);
+  padding: 0 var(--space-2);
+  font-size: var(--text-s);
+}
+
+.filter .problem {
+  font-size: var(--text-s);
+  line-height: var(--control);
+}
+
+/* ---------- layout: the ledger and the record side by side ---------- */
+
+.workspace {
+  display: grid;
+  flex: 1;
+  /* minmax(0, ...) lets the ledger shrink below its longest word instead of overflowing. */
+  grid-template-columns: minmax(0, 1fr) clamp(21rem, 36vw, 33rem);
+  gap: var(--space-5);
+  align-items: start;
+  padding: var(--space-2) var(--gutter) var(--space-5);
+}
+
+/* ---------- results: summary, messages, rows, pager ---------- */
+
+.results {
+  /* The rows lay themselves out by the width of this column, not of the window: the
+     column is narrow at 1024 px with the record beside it and wide on a tablet without. */
+  container-type: inline-size;
+  min-width: 0;
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-3);
+  padding-block: var(--space-2);
+}
+
+.summary h2 {
+  margin: 0;
+  font-size: var(--text-m);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-detail {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* "Searching" appears only when an answer takes longer than a blink. The delay is a
+   step, not a fade: with a fast server it never shows, so nothing flashes while typing. */
+.summary-busy {
+  visibility: hidden;
+  margin-inline-start: auto;
+  color: var(--ink-muted);
+}
+
+.results[aria-busy="true"] .summary-busy {
+  visibility: visible;
+  transition: visibility 0s 300ms;
+}
+
+/* In the place of the rows, under the same full-width rule. */
+.message {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  margin: 0 calc(-1 * var(--space-3));
+  padding: var(--space-4) var(--space-3);
+  border-top: 1px solid var(--ink);
+}
+
+.message p {
+  max-width: 40rem;
+}
+
+.message .actions {
+  margin-top: var(--space-2);
+}
+
+/* The rows reach a little past the text on both sides, so the entity lines up with the
+   labels above while the selection ground has room around it. */
+.ledger {
+  margin: 0 calc(-1 * var(--space-3));
+  padding: 0;
+  border-top: 1px solid var(--ink);
+  list-style: none;
+}
+
+.ledger:empty {
+  display: none;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--rule);
+  cursor: pointer;
+}
+
+.row:active {
+  background: var(--press);
+}
+
+/* The open record's row: a tinted ground and a ring. The ring is an outline because an
+   outline is still drawn when forced colours remove backgrounds. */
+.row.is-selected {
+  background: var(--accent-ground);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* The entity is the button that opens the row. It looks like the value it is; the row
+   around it shows the hover, focus and selected states. */
+.entity {
+  justify-self: start;
+  max-width: 100%;
   padding: 0;
   border: 0;
   background: none;
-  color: var(--accent);
-  font-weight: 600;
-  text-align: left;
-  text-decoration: underline;
+  color: inherit;
+  font: 600 var(--text-m) / 1.45 var(--font-data);
+  text-align: start;
+  cursor: pointer;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
-.hit-meta {
-  color: var(--muted);
-  font-size: 0.85rem;
+/* The focus ring goes around the whole row, because the whole row is the target. A
+   browser without :has() keeps the ring on the entity itself. */
+@supports selector(:has(a)) {
+  .entity:focus-visible {
+    outline: none;
+  }
+
+  .row:has(.entity:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
 }
 
-.type {
-  padding: 0 0.35rem;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--text);
+.row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-3);
+  align-items: baseline;
+  color: var(--ink-muted);
+  font-size: var(--text-s);
 }
 
-.hit-notes {
-  margin: 0.15rem 0 0;
-  /* Notes are shown exactly as written, line breaks included. */
+.row-more {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  align-items: baseline;
+}
+
+/* Notes are shown exactly as written, line breaks included. */
+.row-notes,
+.notes {
   white-space: pre-wrap;
 }
 
-.badges {
+.flags {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
-  margin: 0.2rem 0 0;
+  gap: var(--space-1);
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 
-#hits .badges li,
-.badge {
-  padding: 0 0.35rem;
-  border: 1px dashed var(--border);
-  border-radius: 3px;
-  color: var(--muted);
-  font-size: 0.8rem;
+/* With room, the meta values stand in columns that line up from row to row. */
+@container (width >= 44rem) {
+  .row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .row-meta {
+    display: grid;
+    grid-template-columns: 4rem 6.5rem 8.25rem 5.5rem;
+    gap: var(--space-3);
+  }
+
+  .row-more {
+    grid-column: 1 / -1;
+  }
 }
 
-#pager {
+.pager {
   display: flex;
-  gap: 0.75rem;
   align-items: center;
-  margin: 0.6rem 0;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 
-/* ---------- detail panel ---------- */
-
-#close-detail {
-  margin-bottom: 0.6rem;
+.pager-range {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
 }
 
-.record + .record,
-.shared-id-note + .record {
-  margin-top: 1rem;
-  padding-top: 0.75rem;
-  border-top: 3px double var(--border);
+/* ---------- record panel ---------- */
+
+.record {
+  /* Stays in view while the analyst scrolls down a long result list, and scrolls on its
+     own when the record is longer than the window. dvh follows a phone's address bar;
+     the vh line before it is for browsers that do not know dvh. */
+  position: sticky;
+  top: var(--space-3);
+  max-height: calc(100vh - var(--band) - var(--footer) - var(--space-3));
+  max-height: calc(100dvh - var(--band) - var(--footer) - var(--space-3));
+  overflow-y: auto;
+  /* Reaching the end of the record does not start scrolling the list behind it. */
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
 }
 
-.record dl {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 0.25rem 0.75rem;
-  margin: 0 0 0.6rem;
+/* app.js sets .band-gone on the body when the top band has scrolled out of view. */
+.band-gone .record {
+  max-height: calc(100vh - var(--footer) - 2 * var(--space-3));
+  max-height: calc(100dvh - var(--footer) - 2 * var(--space-3));
 }
 
-.record dt {
-  color: var(--muted);
+.record-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5);
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
 }
 
-.record dd {
+.record-status {
+  color: var(--ink-muted);
+  font-size: var(--text-s);
+}
+
+.record-view {
+  container-type: inline-size;
+  padding: var(--space-4) var(--space-5) var(--space-5);
+}
+
+.record-empty h2,
+.record-title {
+  width: fit-content;
+  max-width: 100%;
   margin: 0;
-  white-space: pre-wrap;
+  font-size: var(--text-l);
+  font-weight: 650;
+  line-height: 1.3;
 }
 
-.record ul {
-  margin: 0 0 0.6rem;
-  padding-left: 1.1rem;
+.record-empty p {
+  margin-top: var(--space-2);
+  color: var(--ink-muted);
+}
+
+/* Text and the retry button that stand directly under the panel's title. */
+#record-content > p {
+  margin-top: var(--space-2);
+}
+
+#record-content > .button {
+  margin-top: var(--space-3);
+}
+
+/* The two headings that take the focus without being controls: the ring stands a
+   little further off, so it frames the words instead of crowding them. */
+.record-title:focus-visible,
+.summary h2:focus-visible {
+  outline-offset: 4px;
+}
+
+.keys {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-5) 0 0;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--rule);
+}
+
+.keys div {
+  display: grid;
+  grid-template-columns: 9.5rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.keys dt {
+  color: var(--ink-muted);
+  font-size: var(--text-s);
+}
+
+.keys dd {
+  margin: 0;
+}
+
+/* One record. Several records that share an id are parted by a full-weight rule. */
+.sheet + .sheet,
+.muted + .sheet {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 2px solid var(--ink);
+}
+
+.sheet-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.sheet-title {
+  min-width: 0;
+  margin: 0;
+  font: 600 var(--text-l) / 1.3 var(--font-data);
+}
+
+.fields {
+  margin: var(--space-3) 0 0;
+  border-top: 1px solid var(--ink);
+}
+
+.field {
+  display: grid;
+  grid-template-columns: 4.75rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-3);
+  padding-block: var(--space-2);
+  border-bottom: 1px solid var(--rule);
+}
+
+.field dt {
+  color: var(--ink-muted);
+  font-size: var(--text-s);
+}
+
+/* Where the panel is very narrow (a small phone, or large text) the label goes above
+   its value instead of beside it. */
+@container (width < 20rem) {
+  .field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+}
+
+.field dd {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+}
+
+.field dd > :first-child {
+  min-width: 0;
+}
+
+.copy {
+  flex: none;
+  justify-content: center;
+  /* Wide enough for "Copied", so the button does not change size when it says so. */
+  min-width: 4.25rem;
+  min-height: 1.625rem;
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.copy.is-copied {
+  border-color: var(--accent);
+  background: var(--accent-ground);
+  color: var(--accent-ink);
 }
 
 /* A recorded value shown as text. The border makes leading and trailing spaces visible. */
 .raw-value {
-  padding: 0 0.25rem;
-  border: 1px solid var(--border);
+  padding: 0 0.3em;
+  border: 1px solid var(--rule);
   border-radius: 3px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.85rem;
-}
-
-pre {
-  margin: 0;
-  padding: 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--background);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.8rem;
+  font: 0.93em var(--font-data);
   white-space: pre-wrap;
 }
 
-/* ---------- narrow screens: one column, the open detail takes over the view ---------- */
+.sheet-section {
+  margin: var(--space-5) 0 var(--space-2);
+  font-size: var(--text-s);
+  font-weight: 650;
+}
 
-@media (max-width: 800px) {
-  main {
+.explanations {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.raw {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--ground);
+  font: var(--text-xs) / 1.5 var(--font-data);
+  white-space: pre-wrap;
+}
+
+/* ---------- footer: the keyboard shortcuts ---------- */
+
+.footer {
+  padding: 0 var(--gutter);
+  border-top: 1px solid var(--rule);
+  background: var(--ground);
+  color: var(--ink-muted);
+  font-size: var(--text-s);
+}
+
+.shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-5);
+  min-height: var(--footer);
+  margin: 0;
+  padding: var(--space-1) 0;
+  list-style: none;
+}
+
+/* Always in reach on a desk-sized window; the record panel's height leaves room for it. */
+@media (width >= 56em) {
+  .footer {
+    position: sticky;
+    bottom: 0;
+  }
+
+  /* Two lines are kept for the data-quality buttons, which is what the whole register
+     needs. A search that leaves two of them must not pull the list up under the eyes. */
+  #flags {
+    min-height: calc(2 * var(--control) + 0.375rem);
+  }
+}
+
+/* ---------- pointer hover ---------- */
+
+/* Only where the pointer can really hover. A touch screen fakes :hover on the last
+   tapped element and leaves it stuck there. */
+@media (hover: hover) and (pointer: fine) {
+  .button:hover:not(:disabled),
+  .toggle:hover {
+    border-color: var(--ink);
+  }
+
+  .toggle[aria-pressed="true"]:hover {
+    border-color: var(--accent);
+  }
+
+  .row:hover:not(.is-selected, :active) {
+    background: var(--hover);
+  }
+
+  a:hover {
+    text-decoration-thickness: 2px;
+  }
+}
+
+/* ---------- narrow screens: one column, the open record takes over the view ---------- */
+
+@media (width < 56em) {
+  :root {
+    --gutter: 1rem;
+  }
+
+  .band {
+    grid-template-columns: minmax(0, 1fr);
+    padding-top: var(--space-3);
+  }
+
+  .product,
+  .finder {
+    grid-area: auto;
+  }
+
+  .product {
+    line-height: 1.45;
+    margin-bottom: var(--space-2);
+  }
+
+  .query {
+    grid-column: 1;
+  }
+
+  /* Each filter is one strip that scrolls sideways inside itself, instead of wrapping
+     into a wall of buttons above the results. The padding keeps focus rings unclipped;
+     the negative margin lets the strip run to the screen edge. */
+  .filter {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-inline: calc(-1 * var(--gutter));
+    padding: var(--space-1) var(--gutter);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .filter-label {
+    flex: none;
+  }
+
+  .filter-body {
+    display: contents;
+  }
+
+  .filter-options {
+    flex: none;
+    flex-wrap: nowrap;
+  }
+
+  .workspace {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  #detail {
-    display: none;
+  .record {
     position: static;
+    display: none;
+    min-height: 100vh;
+    min-height: 100dvh;
     max-height: none;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
 
-  body.detail-open #detail {
+  .record-open .record {
     display: block;
   }
 
-  /* The filters are hidden too: changing them would change a list that is not visible. */
-  body.detail-open #results,
-  body.detail-open header {
+  .record-open :is(.band, .results, .footer) {
     display: none;
+  }
+
+  .record-open .workspace {
+    padding: 0;
+  }
+
+  .record-bar {
+    padding-inline: var(--gutter);
+  }
+
+  .record-view {
+    padding-inline: var(--gutter);
+  }
+}
+
+/* ---------- touch ---------- */
+
+@media (pointer: coarse) {
+  :root {
+    /* 44 px: the smallest target a finger hits reliably. */
+    --control: 2.75rem;
+    --field: 2.75rem;
+  }
+
+  /* iOS zooms the page when a control with text under 16 px takes the focus. */
+  select {
+    font-size: 1rem;
+  }
+
+  .copy {
+    min-height: var(--control);
+  }
+
+  .check input {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+
+  /* Keyboard hints are noise where there is no keyboard. */
+  .query-key,
+  .record-bar kbd,
+  .footer {
+    display: none;
+  }
+
+  .query input {
+    padding-right: var(--space-3);
+  }
+}
+
+/* ---------- motion ---------- */
+
+/* All of the page's motion is in this block, so asking for reduced motion removes all of
+   it. app.js then also skips the view transitions. Nothing here runs while typing or
+   when results replace each other. */
+@media (prefers-reduced-motion: no-preference) {
+  /* A pressed button gives a little, at once. */
+  .button,
+  .toggle {
+    transition: transform var(--press-time) var(--ease-out);
+  }
+
+  .button:active:not(:disabled),
+  .toggle:active {
+    transform: scale(0.97);
+  }
+
+  /* One pulse when a value has been copied. */
+  .copy.is-copied {
+    animation: copied var(--pulse-time) var(--ease-out);
+  }
+
+  /* Opening a record: the row's entity and the panel's title share one name, so the
+     browser moves the text from the row into the title, and back on closing. app.js puts
+     .is-origin on that one row for the length of the transition. */
+  .row.is-origin .entity,
+  .record-title {
+    view-transition-name: record-title;
+  }
+
+  /* The panel's content cross-fades from one record to the next. */
+  .record-view {
+    view-transition-name: record-body;
+  }
+
+  /* Everything else changes at once: the selection ground moves without delay. */
+  ::view-transition-old(root) {
+    display: none;
+  }
+
+  ::view-transition-new(root),
+  ::view-transition-group(root) {
+    animation: none;
+  }
+
+  ::view-transition-group(*) {
+    animation-duration: var(--open-time);
+    animation-timing-function: var(--ease-out);
+  }
+
+  :root[data-motion="close"]::view-transition-group(*) {
+    animation-duration: var(--close-time);
+  }
+}
+
+@keyframes copied {
+  from {
+    background: var(--accent);
+    color: var(--surface);
+  }
+}
+
+/* ---------- forced colours (Windows contrast themes) ---------- */
+
+/* The browser replaces the colours above with the system's and drops shadows and most
+   backgrounds. These rules give back, in system colours, the states that would be lost. */
+@media (forced-colors: active) {
+  /* forced-color-adjust: none, or the browser paints its own plate behind the label
+     and the system colours chosen here end up light on light. */
+  .toggle[aria-pressed="true"],
+  .copy.is-copied {
+    border-color: Highlight;
+    background: Highlight;
+    box-shadow: none;
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
+
+  .toggle[aria-pressed="true"] .count {
+    color: HighlightText;
+  }
+
+  .row.is-selected {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .row.is-selected .entity {
+    text-decoration: underline 2px;
+  }
+
+  mark {
+    background: Mark;
+    color: MarkText;
   }
 }

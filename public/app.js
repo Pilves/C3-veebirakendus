@@ -1,64 +1,119 @@
-// The browser UI: search box, filters, result list and detail panel. An ES module, so the
-// code runs in strict mode, after the page is parsed, and adds no global names.
+// The browser UI: search field, filters, the ledger of results and the record panel.
+// An ES module, so the code runs in strict mode, after the page is parsed, and adds no
+// global names.
 //
 // SECURITY: every finding text that comes from the API (entity, notes, source, the raw
 // record) is untrusted. Some notes contain HTML and script on purpose. This file never
 // turns a string into markup: every node is made with document.createElement and every
 // text is set through textContent or createTextNode, so the browser shows such notes as
-// the characters they are. Styling is done with class names only.
+// the characters they are. Styling is done with class names only; the server's
+// Content-Security-Policy forbids inline style and refuses HTML-from-string sinks.
+//
+// How the file is laid out: constants, the `state` object (the single source of truth),
+// small helpers, the page address, the API, then one render function per part of the
+// page, then the actions that change the state, the keyboard, and start().
 
 const PAGE_SIZE = 50;
-const DEBOUNCE_MS = 250;
-// Longest text accepted from the page address. The server has its own limits; this one
-// only keeps an absurd address from being copied into the controls.
-const MAX_URL_TEXT = 300;
+const TITLE = "Findings search";
+// The server refuses a longer q with 400; the input has the same maxlength.
+const MAX_QUERY = 200;
+// Longest case id or record name accepted from the page address.
+const MAX_NAME = 200;
+// How long after the last result the screen reader is told about it: long enough that
+// typing a word announces one summary, not one per letter.
+const ANNOUNCE_MS = 500;
+const COPIED_MS = 1600;
+// ASCII control characters. A name with one of them cannot have been typed or shown.
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
 
-function byId(id) {
-  return document.getElementById(id);
-}
+// Flag name from the server -> [short label, one sentence for the record panel]. The
+// order here is the order of the filter buttons.
+const FLAG_TEXTS = new Map([
+  ["reimport", ["re-import",
+    "A copy of an earlier record that was imported again under a new id."]],
+  ["duplicate-id", ["shared id",
+    "An unrelated record has the same id; the key adds a number to tell them apart."]],
+  ["id-missing", ["no id", "The record has no id; its key is its row number in the file."]],
+  ["entity-missing", ["no entity", "The record has no entity text."]],
+  ["entity-whitespace", ["entity had spaces",
+    "The entity had spaces around it; they are left out for display and search."]],
+  ["type-mismatch", ["type does not match entity",
+    "The entity does not look like its type says; the type is shown as recorded."]],
+  ["type-nonstandard", ["non-standard type label",
+    "The type was written in another letter case or with spaces; it is read as that type."]],
+  ["type-unknown", ["unknown type",
+    "The recorded type is missing or is not one of the six known types."]],
+  ["case-missing", ["no case", "The record names no case."]],
+  ["case-nonstandard", ["non-standard case id",
+    "The case id was written in another letter case or with spaces and is shown tidied."]],
+  ["case-multiple", ["several cases",
+    "The record belongs to more than one case and is counted in each of them."]],
+  ["time-invalid", ["no valid time",
+    "The observed time is missing or cannot be read without guessing."]],
+  ["source-not-link", ["no source link",
+    "The source is missing or is not an http(s) address; it is shown as text, not a link."]],
+  ["notes-missing", ["no notes", "The record has no notes."]],
+]);
+
+const byId = (id) => document.getElementById(id);
 
 const el = {
+  band: byId("band"),
   query: byId("query"),
-  type: byId("type"),
-  caseId: byId("case"),
+  types: byId("types"),
+  flags: byId("flags"),
+  flagsNone: byId("flags-none"),
   duplicates: byId("duplicates"),
+  caseSelect: byId("case"),
   caseError: byId("case-error"),
-  summary: byId("summary"),
-  searchError: byId("search-error"),
-  searchErrorText: byId("search-error-text"),
-  retry: byId("retry"),
-  empty: byId("empty"),
-  openAsId: byId("open-as-id"),
-  hits: byId("hits"),
+  results: byId("results"),
+  heading: byId("results-heading"),
+  detail: byId("summary-detail"),
+  message: byId("message"),
+  rows: byId("rows"),
   pager: byId("pager"),
   previous: byId("previous"),
   next: byId("next"),
   range: byId("range"),
-  zoneNote: byId("zone-note"),
-  detail: byId("detail"),
-  detailHeading: byId("detail-heading"),
-  closeDetail: byId("close-detail"),
-  detailBody: byId("detail-body"),
+  record: byId("record"),
+  recordBar: byId("record-bar"),
+  recordStatus: byId("record-status"),
+  closeRecord: byId("close-record"),
+  recordEmpty: byId("record-empty"),
+  recordContent: byId("record-content"),
+  announcer: byId("announcer"),
 };
 
-// Everything the view depends on. The page address is a copy of this (see writeUrl), so
-// a search can be bookmarked and the back button works.
+// The type buttons are written in index.html; their values are the valid types.
+const TYPES = [...el.types.children].map((button) => button.dataset.value);
+
+// Everything the page shows follows from this object. The first seven fields are also
+// kept in the page address (see writeAddress); the last two hold the server's answers.
 const state = {
   query: "",
   type: "", // "" means all types
+  flag: "", // "" means no data-quality filter
   caseId: "", // "" means all cases
   duplicates: false,
   page: 1,
-  selected: "", // key or id of the finding in the detail panel, "" when none
+  selected: "", // key or id of the record in the panel, "" when the panel is closed
+  search: { status: "loading", total: 0, offset: 0, hits: [], facets: null, message: "" },
+  record: { status: "closed", name: "", findings: [], message: "" },
 };
 
-let debounceTimer = 0;
+// The same breakpoint as styles.css: below it the open record takes over the view.
+const narrowScreen = window.matchMedia("(width < 56em)");
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
 let searchAbort = null; // AbortController of the search request in flight
-let detailAbort = null; // the same for the detail request
-let lastPage = 1;
-// The <li> of every result on the page, by finding key. A Map, because keys come from the
+let recordAbort = null; // the same for the record request
+let announceTimer = 0;
+let latestTransition = null;
+let scrollBeforeRecord = 0; // where the list was scrolled to when a record took over
+// The <li> of every result on the page, by finding key. Maps, because keys come from the
 // data and a name like "__proto__" must not find anything on a plain object.
 const rowsByKey = new Map();
+const flagButtons = new Map();
 
 // ---------- small DOM helpers ----------
 
@@ -77,23 +132,24 @@ function button(className, text, onClick) {
   return node;
 }
 
-// For entity and notes. The page says lang="en", but this text may be Estonian or
-// anything else. An empty lang tells a screen reader "language unknown", and
+// For text from the findings. The page says lang="en", but this text may be Estonian or
+// anything else: an empty lang tells a screen reader "language unknown", and
 // translate="no" keeps a browser translator from rewriting evidence.
-function markAsEvidence(node) {
+function evidence(node) {
   node.setAttribute("lang", "");
   node.setAttribute("translate", "no");
   return node;
+}
+
+// A value an analyst may cite, in the monospace face.
+function dataText(text) {
+  return evidence(element("span", "data", text));
 }
 
 function optionNode(label, value) {
   const node = element("option", undefined, label);
   node.value = value;
   return node;
-}
-
-function hasOption(select, value) {
-  return [...select.options].some((option) => option.value === value);
 }
 
 // ---------- highlighting ----------
@@ -108,83 +164,42 @@ function highlighted(text, ranges) {
     // The server promises sorted, non-overlapping ranges inside the string. A range that
     // breaks the promise is skipped, so the text is still shown once and in full.
     if (!isUsableRange(range, position, text.length)) continue;
-    fragment.append(document.createTextNode(text.slice(position, range.start)));
+    fragment.append(text.slice(position, range.start));
     fragment.append(element("mark", undefined, text.slice(range.start, range.end)));
     position = range.end;
   }
-  fragment.append(document.createTextNode(text.slice(position)));
+  fragment.append(text.slice(position));
   return fragment;
 }
 
 function isUsableRange(range, position, length) {
-  if (!Number.isInteger(range.start) || !Number.isInteger(range.end)) return false;
+  if (!Number.isInteger(range?.start) || !Number.isInteger(range?.end)) return false;
   return range.start >= position && range.end > range.start && range.end <= length;
 }
 
 // ---------- times ----------
 
+// The server sends observedAt as UTC in one fixed form, 2026-10-27T11:58:07.000Z, so the
+// UTC text is cut out of it: `length` 16 gives minutes, 19 gives seconds.
+function utcText(iso, length) {
+  return iso.slice(0, length).replace("T", " ");
+}
+
 function twoDigits(number) {
   return String(number).padStart(2, "0");
 }
 
-// Local time as 2026-10-27 13:58. Built by hand because toLocaleString gives a different
-// order of day and month on different machines. Empty when there is no valid time.
-function localTime(iso) {
-  if (iso === null) return "";
+// The same moment on this computer's clock. Built by hand because toLocaleString gives a
+// different order of day and month on different machines.
+function localText(iso) {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
   const day = [date.getFullYear(), date.getMonth() + 1, date.getDate()];
-  const time = [date.getHours(), date.getMinutes()];
+  const time = [date.getHours(), date.getMinutes(), date.getSeconds()];
   return `${day.map(twoDigits).join("-")} ${time.map(twoDigits).join(":")}`;
 }
 
-function timeZoneName() {
-  return Intl.DateTimeFormat().resolvedOptions().timeZone;
-}
-
-// ---------- data-quality flags ----------
-
-// Flag name from the server -> [short label for the list, one sentence for the detail].
-const FLAG_TEXTS = new Map([
-  ["id-missing", ["no id", "The record has no id; its key is its row number in the file."]],
-  ["duplicate-id", ["duplicate id",
-    "Another, unrelated record has the same id; the key adds a number to tell them apart."]],
-  ["reimport", ["re-import", "This record is a copy of an earlier record, imported again."]],
-  ["entity-missing", ["no entity", "The record has no entity text."]],
-  ["entity-whitespace", ["entity trimmed",
-    "The entity had spaces around it; they were removed for display and search."]],
-  ["type-nonstandard", ["type respelled",
-    "The type was written in another letter case or with spaces; it was read as a known type."]],
-  ["type-unknown", ["unknown type",
-    "The recorded type is missing or is not one of the six known types."]],
-  ["type-mismatch", ["type does not match entity",
-    "The entity does not look like its type says; the type was left as recorded."]],
-  ["case-missing", ["no case", "The record names no case."]],
-  ["case-nonstandard", ["case id respelled",
-    "The case id was written in another letter case or with spaces and was tidied."]],
-  ["case-multiple", ["several cases",
-    "The record belongs to more than one case and is counted in each of them."]],
-  ["time-invalid", ["no valid time",
-    "The observed time is missing or is not in a format that can be read without guessing."]],
-  ["source-not-link", ["no source link",
-    "The source is missing or is not an http(s) address; it is shown as text, not as a link."]],
-  ["notes-missing", ["no notes", "The record has no notes."]],
-]);
-
-// A flag this file does not know yet is shown by its name instead of being dropped.
-function flagLabel(flag) {
-  return FLAG_TEXTS.get(flag)?.[0] ?? String(flag);
-}
-
-function flagExplanation(flag) {
-  return FLAG_TEXTS.get(flag)?.[1] ?? "No explanation is available for this flag.";
-}
-
 // ---------- the page address ----------
-
-function shortText(value) {
-  return (value ?? "").slice(0, MAX_URL_TEXT);
-}
 
 // "2" -> 2. Anything else ("-5", "1e3", "abc", "0", nothing) -> 1.
 function pageNumberOf(value) {
@@ -193,18 +208,22 @@ function pageNumberOf(value) {
 }
 
 // The address is typed, pasted and edited by people, so each value is checked before it
-// becomes state. Unknown values fall back to the default instead of raising an error.
-function readStateFromUrl() {
+// becomes state. A value that fails falls back to the default instead of raising an error.
+function readAddress() {
   const params = new URLSearchParams(location.search);
-  const type = params.get("type") ?? "";
-  state.query = shortText(params.get("q"));
-  state.type = hasOption(el.type, type) ? type : "";
+  const name = (key) => {
+    const text = (params.get(key) ?? "").slice(0, MAX_NAME).trim();
+    return CONTROL_CHARACTER.test(text) ? "" : text;
+  };
+  state.query = (params.get("q") ?? "").slice(0, MAX_QUERY);
+  state.type = TYPES.includes(name("type")) ? name("type") : "";
+  state.flag = FLAG_TEXTS.has(name("flag")) ? name("flag") : "";
   // The server compares case ids trimmed and in upper case; doing the same here lets
-  // "case-1" in an address select the option "CASE-1".
-  state.caseId = shortText(params.get("case")).trim().toUpperCase();
+  // "c-101" in an address select the option "C-101".
+  state.caseId = name("case").toUpperCase();
   state.duplicates = params.get("duplicates") === "1";
   state.page = pageNumberOf(params.get("page"));
-  state.selected = shortText(params.get("selected")).trim();
+  state.selected = name("selected");
 }
 
 // Only what differs from the default is written, so the plain view has a plain address.
@@ -212,6 +231,7 @@ function pageAddress() {
   const params = new URLSearchParams();
   if (state.query !== "") params.set("q", state.query);
   if (state.type !== "") params.set("type", state.type);
+  if (state.flag !== "") params.set("flag", state.flag);
   if (state.caseId !== "") params.set("case", state.caseId);
   if (state.duplicates) params.set("duplicates", "1");
   if (state.page > 1) params.set("page", String(state.page));
@@ -220,58 +240,92 @@ function pageAddress() {
   return search === "" ? location.pathname : `${location.pathname}?${search}`;
 }
 
-// push = true adds a step the back button returns to (filter, page, open a finding).
-// push = false replaces the current step (typing), so "back" does not undo letter by letter.
-function writeUrl(push) {
+// push = true adds a step the Back button returns to: opening or closing a record (so
+// Back closes it, which is what a phone user expects) and paging. Typing and filters
+// replace the current step, so Back does not undo a search letter by letter.
+function writeAddress(push) {
+  showTitle();
   const address = pageAddress();
   if (address === location.pathname + location.search) return;
-  if (push) history.pushState(null, "", address);
-  else history.replaceState(null, "", address);
+  try {
+    if (push) history.pushState(null, "", address);
+    else history.replaceState(null, "", address);
+  } catch {
+    // Safari refuses more than 100 address changes in 30 seconds. Nothing is lost: the
+    // next change that goes through writes the whole state again.
+  }
 }
 
+function showTitle() {
+  const query = state.query.trim();
+  document.title = query === "" ? TITLE : `${query} – ${TITLE}`;
+}
+
+// Copies the state into the controls; used at start and after Back or Forward.
 function syncControls() {
   el.query.value = state.query;
-  el.type.value = state.type;
   el.duplicates.checked = state.duplicates;
   showCaseInSelect();
+  showTitle();
+  renderFilters();
 }
 
 // A case from the address that is not in the list still gets an option, so the select
 // never shows "All cases" while a case filter is in fact applied.
 function showCaseInSelect() {
-  if (!hasOption(el.caseId, state.caseId)) {
-    el.caseId.append(optionNode(`${state.caseId} (not in the case list)`, state.caseId));
+  const known = [...el.caseSelect.options].some((option) => option.value === state.caseId);
+  if (!known) {
+    el.caseSelect.append(optionNode(`${state.caseId} (not in the case list)`, state.caseId));
   }
-  el.caseId.value = state.caseId;
+  el.caseSelect.value = state.caseId;
 }
 
 // ---------- talking to the API ----------
 
-// Returns the parsed JSON, or throws an Error whose message can be shown to the analyst.
-// Only same-origin paths starting with /api/ are ever passed in.
+// What went wrong with a request, with the HTTP status (0 when no answer arrived) and a
+// message that can be shown to the analyst as it is.
+class ApiError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+function refusalText(status, said) {
+  let what = "did not accept the request";
+  if (status === 403) what = "refused the request";
+  if (status === 404) what = "has nothing at this address";
+  if (status >= 500) what = "failed";
+  return `The server ${what} (${status}): ${said}`;
+}
+
+// Returns the parsed JSON or throws an ApiError. Only same-origin paths that start with
+// /api/ are ever passed in.
 async function fetchJson(path, signal) {
   let response;
   try {
     response = await fetch(path, { signal, headers: { Accept: "application/json" } });
   } catch {
     // fetch rejects when no answer arrived at all (server down, no network, cancelled).
-    throw new Error("Cannot reach the server. Check that it is running, then try again.");
+    throw new ApiError(0, "Cannot reach the server. Check that it is running, then try again.");
   }
   // An error page from a proxy may not be JSON; then only the status is known.
   const body = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = typeof body?.error === "string" ? body.error : "no message";
-    throw new Error(`The server refused the request (${response.status}): ${message}`);
+    const said = typeof body?.error === "string" ? body.error : "no message";
+    throw new ApiError(response.status, refusalText(response.status, said));
   }
-  if (body === null) throw new Error("The server sent an answer that is not JSON.");
+  if (body === null) throw new ApiError(response.status, "The server's answer is not JSON.");
   return body;
 }
 
-// The API answers 400 to an empty type= or duplicates=, so unset filters are left out.
+// The API answers 400 to an empty type=, flag= or duplicates=, so unset filters are
+// left out. URLSearchParams does the escaping.
 function searchPath() {
   const params = new URLSearchParams();
   if (state.query.trim() !== "") params.set("q", state.query);
   if (state.type !== "") params.set("type", state.type);
+  if (state.flag !== "") params.set("flag", state.flag);
   if (state.caseId !== "") params.set("case", state.caseId);
   if (state.duplicates) params.set("duplicates", "1");
   params.set("limit", String(PAGE_SIZE));
@@ -279,7 +333,9 @@ function searchPath() {
   return `/api/findings?${params}`;
 }
 
-// ---------- search ----------
+function lastPageOf(total) {
+  return Math.max(1, Math.ceil(total / PAGE_SIZE));
+}
 
 async function runSearch() {
   // Cancel the request this one overtakes. Without it a slow answer to "abc" could
@@ -287,207 +343,410 @@ async function runSearch() {
   searchAbort?.abort();
   const controller = new AbortController();
   searchAbort = controller;
-  el.summary.textContent = "Searching…";
+  // The previous rows stay on screen until the answer is here; see .summary-busy.
+  el.results.setAttribute("aria-busy", "true");
+  let search;
   try {
-    const result = await fetchJson(searchPath(), controller.signal);
-    if (controller.signal.aborted) return;
-    if (!Array.isArray(result.hits) || !Number.isInteger(result.total)) {
-      throw new Error("The server sent an answer in an unexpected shape.");
+    const body = await fetchJson(searchPath(), controller.signal);
+    if (!Array.isArray(body.hits) || !Number.isInteger(body.total)) {
+      throw new ApiError(200, "The server sent an answer in an unexpected shape.");
     }
-    showResults(result);
+    const offset = Number.isInteger(body.offset) ? body.offset : 0;
+    const facets = body.facets ?? null;
+    search = { status: "ready", total: body.total, offset, hits: body.hits, facets, message: "" };
   } catch (error) {
-    // A cancelled request also lands here; a newer one is in charge of the screen then.
-    if (controller.signal.aborted) return;
-    showSearchError(error.message);
+    const message = error.message;
+    search = { status: "error", total: 0, offset: 0, hits: [], facets: null, message };
   }
-}
-
-function showResults(result) {
-  lastPage = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
+  // A cancelled request also ends here; a newer one is in charge of the screen then.
+  if (controller.signal.aborted) return;
   // An address can ask for page 99 of 3. Show the last real page instead of an empty one.
-  if (result.hits.length === 0 && result.total > 0 && state.page > lastPage) {
+  const lastPage = lastPageOf(search.total);
+  if (search.status === "ready" && state.page > lastPage) {
     state.page = lastPage;
-    writeUrl(false);
-    runSearch();
+    writeAddress(false);
+    await runSearch();
     return;
   }
-  rowsByKey.clear();
-  el.hits.replaceChildren(...result.hits.map(hitRow));
-  el.searchError.hidden = true;
-  el.summary.textContent = summaryText(result.total);
-  showEmptyState(result.total === 0);
-  showPager(result);
-  markSelectedRow();
+  state.search = search;
+  el.results.removeAttribute("aria-busy");
+  renderFilters();
+  renderResults();
+  announceLater(announcementText());
 }
 
-function summaryText(total) {
-  if (total === 0) return "0 findings";
+// A screen reader hears the result of a search once it has settled. The visible summary
+// cannot be the live region itself: it changes with every letter typed, and each change
+// would be read out.
+function announceLater(text) {
+  clearTimeout(announceTimer);
+  announceTimer = setTimeout(() => {
+    el.announcer.textContent = text;
+  }, ANNOUNCE_MS);
+}
+
+async function fetchRecord(name, signal) {
+  const missing = `No finding has the id “${name}”.`;
+  // A browser reads "." and ".." in a path as "this folder" and "one up" and would ask
+  // for another address altogether. No finding has such an id, so none is asked for.
+  if (name === "." || name === "..") throw new ApiError(404, missing);
+  try {
+    // encodeURIComponent keeps a key with "/" or "?" in it inside one path segment.
+    const body = await fetchJson(`/api/findings/${encodeURIComponent(name)}`, signal);
+    if (Array.isArray(body.findings) && body.findings.length > 0) return body.findings;
+    throw new ApiError(200, "The server sent an answer in an unexpected shape.");
+  } catch (error) {
+    throw error.status === 404 ? new ApiError(404, missing) : error;
+  }
+}
+
+async function loadCases() {
+  try {
+    const body = await fetchJson("/api/cases");
+    if (!Array.isArray(body.cases)) throw new ApiError(200, "unexpected shape");
+    const options = body.cases.map(
+      (item) => optionNode(`${item.caseId} (${item.findings})`, item.caseId),
+    );
+    el.caseSelect.replaceChildren(optionNode("All cases", ""), ...options);
+    showCaseInSelect();
+  } catch {
+    // The search still works without the list; say so instead of failing silently.
+    el.caseError.hidden = false;
+  }
+}
+
+// ---------- render: filters ----------
+
+// One button per flag, made once and then only shown, hidden and relabelled. Buttons
+// that are never replaced can never lose the keyboard focus to a re-render.
+function buildFlagButtons() {
+  for (const [flag, [label]] of FLAG_TEXTS) {
+    const node = element("button", "toggle", `${label} `);
+    node.type = "button";
+    node.dataset.value = flag;
+    node.hidden = true;
+    node.append(element("span", "count"));
+    flagButtons.set(flag, node);
+    el.flags.append(node);
+  }
+}
+
+// A count from the server's facets, or null while it is not known.
+function countOf(table, name) {
+  const count = table?.[name];
+  return Number.isInteger(count) ? count : null;
+}
+
+function showToggle(node, isPressed, count) {
+  node.setAttribute("aria-pressed", String(isPressed));
+  node.classList.toggle("is-empty", count === 0);
+  node.lastElementChild.textContent = count === null ? "" : String(count);
+}
+
+// The count on a button is the total the analyst gets by pressing it: the server counts
+// each type and each flag with all the other filters applied.
+function renderFilters() {
+  const facets = state.search.facets;
+  for (const node of el.types.children) {
+    const type = node.dataset.value;
+    let count = countOf(facets?.types, type);
+    // "All" is every type together.
+    if (type === "" && facets !== null) {
+      count = TYPES.reduce((sum, name) => sum + (countOf(facets.types, name) ?? 0), 0);
+    }
+    showToggle(node, state.type === type, count);
+  }
+  let shown = 0;
+  for (const [flag, node] of flagButtons) {
+    const count = countOf(facets?.flags, flag) ?? 0;
+    // Only flags that occur in these results get a button. The active one stays so it
+    // can be released, and the focused one stays so the focus is not dropped.
+    const keep = count > 0 || state.flag === flag || node === document.activeElement;
+    node.hidden = !keep;
+    if (keep) shown += 1;
+    showToggle(node, state.flag === flag, count);
+  }
+  el.flagsNone.hidden = shown > 0 || facets === null;
+}
+
+// ---------- render: summary, messages, rows, pager ----------
+
+function countText(total) {
   return total === 1 ? "1 finding" : `${total} findings`;
 }
 
-function showSearchError(message) {
-  rowsByKey.clear();
-  el.hits.replaceChildren();
-  el.pager.hidden = true;
-  el.empty.hidden = true;
-  el.summary.textContent = "The search failed.";
-  el.searchErrorText.textContent = message;
-  el.searchError.hidden = false;
+function rangeText() {
+  const { offset, hits } = state.search;
+  return `${offset + 1}–${offset + hits.length}`;
 }
 
-// The search looks in entity and notes only, not in ids. When nothing matched and the
-// query is one word, it may be an id the analyst pasted, so offer to open it as one.
-function showEmptyState(isEmpty) {
-  const word = state.query.trim();
-  el.empty.hidden = !isEmpty;
-  el.openAsId.hidden = word === "" || /\s/.test(word);
-  el.openAsId.textContent = `Open the finding with id "${word}"`;
+// The words after the count: how the list is ordered, which part of it is on screen,
+// and the time zone of the times, said once here instead of on every row.
+function detailText() {
+  const { status, total, hits } = state.search;
+  if (status !== "ready" || total === 0) return "";
+  const order = state.query.trim() === "" ? "newest first" : "best match first, then newest";
+  const parts = [order, "times in UTC"];
+  if (total > hits.length) parts.splice(1, 0, `showing ${rangeText()}`);
+  return parts.join(" · ");
 }
 
-function showPager(result) {
-  const first = result.offset + 1;
-  const last = result.offset + result.hits.length;
-  el.pager.hidden = result.total === 0;
-  el.range.textContent = `${first}–${last} of ${result.total}`;
-  el.previous.disabled = state.page <= 1;
-  el.next.disabled = state.page >= lastPage;
+function announcementText() {
+  const { status, total, message } = state.search;
+  if (status === "error") return `The search failed. ${message}`;
+  if (total === 0) return "No findings match.";
+  const shown = total > state.search.hits.length ? `, showing ${rangeText()}` : "";
+  return `${countText(total)}${shown}.`;
 }
 
-// ---------- one row of the result list ----------
+function renderResults() {
+  const { status, total } = state.search;
+  let heading = countText(total);
+  if (status === "loading") heading = "Loading findings";
+  if (status === "error") heading = "The search failed";
+  el.heading.textContent = heading;
+  el.detail.textContent = detailText();
+  renderMessage();
+  renderRows();
+  renderPager();
+}
 
-function hitRow(hit) {
-  const finding = hit.finding;
-  const row = element("li");
-  const head = element("div", "hit-head");
-  head.append(entityButton(finding, hit.entityRanges), hitMeta(finding));
-  row.append(head);
-  if (finding.notes !== null) {
-    const notes = markAsEvidence(element("p", "hit-notes"));
-    notes.append(highlighted(finding.notes, hit.notesRanges));
-    row.append(notes);
+function hasFilters() {
+  return state.type !== "" || state.flag !== "" || state.caseId !== "";
+}
+
+// Shown in place of the rows: why there is nothing, and what to do about it.
+function renderMessage() {
+  const { status, total, message } = state.search;
+  let nodes = [];
+  if (status === "error") nodes = errorNodes(message, retrySearch);
+  else if (status === "ready" && total === 0) nodes = noResultNodes();
+  el.message.replaceChildren(...nodes);
+  el.message.hidden = nodes.length === 0;
+}
+
+function errorNodes(message, onRetry) {
+  return [element("p", "problem", message), button("button", "Try again", onRetry)];
+}
+
+function noResultNodes() {
+  const query = state.query.trim();
+  const nodes = [];
+  if (query === "") {
+    nodes.push(element("p", undefined, "No finding passes these filters."));
+  } else {
+    const where = hasFilters() ? " with these filters" : "";
+    const line = element("p", undefined, "No entity or note contains ");
+    line.append(element("strong", undefined, query), `${where}.`);
+    const advice = "The search looks at entity and notes only, and every word must be "
+      + "found. Try fewer words, or one word without its ending.";
+    nodes.push(line, element("p", "muted", advice));
   }
-  if (finding.flags.length > 0) row.append(badgeList(finding.flags));
+  const actions = element("p", "actions");
+  if (hasFilters()) actions.append(button("button", "Clear the filters", clearFilters));
+  // An id pasted into the search field finds nothing, because ids are not searched.
+  if (/^F-\d+(\.\d+)?$/i.test(query)) {
+    const id = query.toUpperCase();
+    nodes.push(element("p", "muted", "This looks like a finding id. Ids are not searched."));
+    actions.append(button("button", `Open ${id} as an id`, () => openRecord(id)));
+  }
+  if (actions.hasChildNodes()) nodes.push(actions);
+  return nodes;
+}
+
+function focusedRowKey() {
+  return document.activeElement?.closest(".row")?.dataset.key;
+}
+
+function renderRows() {
+  // New rows replace the old ones. If the focus was on a row it moves to the same
+  // finding in the new list, or to the heading: never to nowhere.
+  const focusedKey = focusedRowKey();
+  rowsByKey.clear();
+  el.rows.replaceChildren(...state.search.hits.map(ledgerRow));
+  markSelectedRow();
+  if (focusedKey === undefined) return;
+  const target = rowsByKey.get(focusedKey)?.querySelector(".entity") ?? el.heading;
+  target.focus({ preventScroll: true });
+}
+
+// One finding in the list. The entity is the button that opens it; a click anywhere
+// else on the row does the same (see onRowClick).
+function ledgerRow(hit) {
+  const finding = hit.finding;
+  const row = element("li", "row");
+  row.dataset.key = finding.key;
+
+  const open = element("button", "entity");
+  open.type = "button";
+  if (finding.entity === "") open.textContent = "(no entity)";
+  else evidence(open).append(highlighted(finding.entity, hit.entityRanges));
+
+  const meta = element("div", "row-meta");
+  const cases = finding.caseIds.length > 0 ? finding.caseIds.join(", ") : "no case";
+  let time = element("span", undefined, "no valid time");
+  if (finding.observedAt !== null) {
+    time = element("time", "data", utcText(finding.observedAt, 16));
+    time.dateTime = finding.observedAt;
+  }
+  const id = finding.id === "" ? element("span", undefined, "no id") : dataText(finding.id);
+  meta.append(element("span", undefined, finding.type), dataText(cases), time, id);
+
+  const more = element("div", "row-more");
+  if (finding.notes !== null) {
+    const notes = evidence(element("p", "row-notes"));
+    notes.append(highlighted(finding.notes, hit.notesRanges));
+    more.append(notes);
+  }
+  if (finding.flags.length > 0) more.append(flagList(finding.flags));
+
+  row.append(open, meta, more);
   rowsByKey.set(finding.key, row);
   return row;
 }
 
-function entityButton(finding, ranges) {
-  const open = button("entity", undefined, () => selectFinding(finding.key));
-  if (finding.entity === "") open.textContent = "(no entity)";
-  else markAsEvidence(open).append(highlighted(finding.entity, ranges));
-  return open;
+// A flag this file does not know yet is shown by its name instead of being dropped.
+function flagLabel(flag) {
+  return FLAG_TEXTS.get(flag)?.[0] ?? String(flag);
 }
 
-function hitMeta(finding) {
-  const meta = element("span", "hit-meta");
-  const cases = finding.caseIds.length > 0 ? finding.caseIds.join(", ") : "no case";
-  const time = localTime(finding.observedAt) || "no valid time";
-  meta.append(element("span", "type", finding.type), ` ${cases} · ${time}`);
-  return meta;
-}
-
-function badgeList(flags) {
-  const list = element("ul", "badges");
-  list.setAttribute("aria-label", "Data-quality notes");
-  for (const flag of flags) list.append(element("li", undefined, flagLabel(flag)));
+function flagList(flags) {
+  const list = element("ul", "flags");
+  list.setAttribute("aria-label", "Data-quality flags");
+  for (const flag of flags) list.append(element("li", "flag", flagLabel(flag)));
   return list;
 }
 
 function markSelectedRow() {
   for (const [key, row] of rowsByKey) {
     const isSelected = key === state.selected;
-    row.classList.toggle("selected", isSelected);
-    const open = row.querySelector("button.entity");
+    row.classList.toggle("is-selected", isSelected);
+    const open = row.querySelector(".entity");
     if (isSelected) open.setAttribute("aria-current", "true");
     else open.removeAttribute("aria-current");
   }
 }
 
-// ---------- detail panel ----------
-
-async function loadDetail() {
-  detailAbort?.abort();
-  const isOpen = state.selected !== "";
-  // On a narrow screen this class makes the panel take over the view (see styles.css).
-  document.body.classList.toggle("detail-open", isOpen);
-  el.closeDetail.hidden = !isOpen;
-  markSelectedRow();
-  if (!isOpen) {
-    showDetailMessage("muted", "Select a finding to see its details.");
-    return;
-  }
-  const controller = new AbortController();
-  detailAbort = controller;
-  showDetailMessage("muted", "Loading…");
-  try {
-    // encodeURIComponent keeps a key with "/" or "?" in it inside one path segment.
-    const path = `/api/findings/${encodeURIComponent(state.selected)}`;
-    const body = await fetchJson(path, controller.signal);
-    if (controller.signal.aborted) return;
-    if (!Array.isArray(body.findings)) {
-      throw new Error("The server sent an answer in an unexpected shape.");
-    }
-    showDetail(body.findings);
-  } catch (error) {
-    if (controller.signal.aborted) return;
-    showDetailMessage("error", error.message);
-  }
+function renderPager() {
+  const { status, total } = state.search;
+  const lastPage = lastPageOf(total);
+  el.pager.hidden = status !== "ready" || lastPage === 1;
+  el.range.textContent = `${rangeText()} of ${total}`;
+  el.previous.disabled = state.page <= 1;
+  el.next.disabled = state.page >= lastPage;
 }
 
-function showDetailMessage(className, text) {
-  el.detailBody.replaceChildren(element("p", className, text));
+// ---------- render: the record panel ----------
+
+function renderRecord() {
+  const { status, findings, message } = state.record;
+  const isOpen = status !== "closed";
+  // On a narrow screen this class makes the panel take over the view (see styles.css).
+  document.body.classList.toggle("record-open", isOpen);
+  el.recordBar.hidden = !isOpen;
+  el.recordEmpty.hidden = isOpen;
+  el.recordContent.hidden = !isOpen;
+  el.recordStatus.textContent = "";
+  let nodes = [];
+  if (status === "ready") nodes = recordNodes(findings);
+  if (status === "error") nodes = recordErrorNodes(message);
+  el.recordContent.replaceChildren(...nodes);
+  el.record.removeAttribute("aria-busy");
+  el.record.scrollTop = 0;
+}
+
+// The first heading of the panel takes the focus when a record opens, so a keyboard or
+// screen-reader user lands on what was opened. tabindex -1: focusable, not a tab stop.
+function panelTitle(text) {
+  const title = element("h2", "record-title", text);
+  title.tabIndex = -1;
+  return title;
+}
+
+function recordErrorNodes(message) {
+  const retry = () => loadRecord(true);
+  return [panelTitle("This record cannot be shown"), ...errorNodes(message, retry)];
 }
 
 // The API returns a list: an id shared by unrelated records returns all of them.
-function showDetail(findings) {
-  const nodes = [];
-  if (findings.length > 1) {
-    const note = `${findings.length} unrelated records share this id. All are shown below.`;
-    nodes.push(element("p", "notice shared-id-note", note));
-  }
-  findings.forEach((finding, index) => {
-    nodes.push(recordView(finding, index + 1, findings.length));
-  });
-  el.detailBody.replaceChildren(...nodes);
+function recordNodes(findings) {
+  if (findings.length === 1) return [recordSheet(findings[0], true)];
+  const title = panelTitle(`${findings.length} records share the id `);
+  title.append(dataText(findings[0].id));
+  const note = "They are unrelated findings that were given the same id. Each has its own "
+    + "key; cite the key to name one of them.";
+  const sheets = findings.map((finding) => recordSheet(finding, false));
+  return [title, element("p", "muted", note), ...sheets];
 }
 
-function recordView(finding, position, count) {
-  const record = element("article", "record");
-  if (count > 1) record.append(element("p", "muted", `Record ${position} of ${count}`));
-  const entity = finding.entity === "" ? "(no entity)" : finding.entity;
-  record.append(markAsEvidence(element("h3", undefined, entity)));
-  record.append(fieldList(finding));
-  record.append(...recordLinks(finding));
-  record.append(element("h4", undefined, "Data-quality flags"), flagList(finding.flags));
-  record.append(element("h4", undefined, "Record as originally recorded"));
-  // JSON.stringify gives undefined for a few values (a bare undefined); show that word.
+// Highlights are reused from the list when the record is on the current page. The text
+// is compared first: ranges cut into a different string would mark the wrong letters.
+function listRanges(finding, field) {
+  const hit = state.search.hits.find((item) => item.finding.key === finding.key);
+  if (hit === undefined || hit.finding[field] !== finding[field]) return [];
+  return field === "entity" ? hit.entityRanges : hit.notesRanges;
+}
+
+// One record. Alone in the panel its entity is the panel's title; among several records
+// that share an id it is a heading one level down.
+function recordSheet(finding, isAlone) {
+  const sheet = element("article", "sheet");
+  const title = isAlone ? panelTitle() : element("h3");
+  title.classList.add("sheet-title");
+  if (finding.entity === "") title.textContent = "(no entity)";
+  else evidence(title).append(highlighted(finding.entity, listRanges(finding, "entity")));
+  const head = element("div", "sheet-head");
+  head.append(title);
+  if (finding.entity !== "") head.append(copyButton(finding.entity, "entity"));
+
+  const sectionTag = isAlone ? "h3" : "h4";
+  // JSON.stringify gives undefined for a bare undefined; show that word then.
   const rawText = JSON.stringify(finding.raw, null, 2) ?? "undefined";
-  record.append(markAsEvidence(element("pre", undefined, rawText)));
-  return record;
+  sheet.append(
+    head,
+    fieldList(finding),
+    element(sectionTag, "sheet-section", "Data quality"),
+    flagExplanations(finding.flags),
+    recordActions(finding),
+    element(sectionTag, "sheet-section", "Record as it was received"),
+    evidence(element("pre", "raw", rawText)),
+  );
+  return sheet;
 }
 
 function fieldList(finding) {
-  const list = element("dl");
+  const list = element("dl", "fields");
+  const none = () => element("span", "muted", "none recorded");
+  const cases = finding.caseIds.join(", ");
+  const recordedSource = rawField(finding.raw, "sourceUrl");
   addField(list, "Type", typeValue(finding));
-  addField(list, "Id", finding.id === "" ? "(none)" : finding.id);
-  addField(list, "Key", finding.key);
-  addField(list, "Cases", finding.caseIds.length > 0 ? finding.caseIds.join(", ") : "(none)");
+  addField(list, "Id", finding.id === "" ? none() : dataText(finding.id), finding.id);
+  addField(list, "Key", dataText(finding.key), finding.key);
+  addField(list, "Cases", cases === "" ? none() : dataText(cases));
   addField(list, "Observed", observedValue(finding));
-  addField(list, "Source", sourceValue(finding));
-  const notes = finding.notes === null ? "(none)" : markAsEvidence(notesValue(finding.notes));
-  addField(list, "Notes", notes);
+  const source = sourceValue(finding.sourceUrl, recordedSource);
+  addField(list, "Source", source, finding.sourceUrl ?? recordedSource);
+  addField(list, "Notes", finding.notes === null ? none() : notesValue(finding));
   return list;
 }
 
-// `content` is a string (set as text) or a node built by this file.
-function addField(list, label, content) {
-  const value = element("dd");
-  value.append(content);
-  list.append(element("dt", undefined, label), value);
+// `value` is a node built by this file. `copy`, when it is a non-empty string, is the
+// exact text the field's Copy button puts on the clipboard.
+function addField(list, label, value, copy) {
+  const row = element("div", "field");
+  const cell = element("dd");
+  cell.append(value);
+  if (typeof copy === "string" && copy !== "") {
+    cell.append(copyButton(copy, label.toLowerCase()));
+  }
+  row.append(element("dt", undefined, label), cell);
+  list.append(row);
 }
 
-function notesValue(notes) {
-  return element("span", undefined, notes);
+function notesValue(finding) {
+  const notes = evidence(element("p", "notes"));
+  notes.append(highlighted(finding.notes, listRanges(finding, "notes")));
+  return notes;
 }
 
 // One field of the raw record, or undefined. The raw record is whatever was in the input
@@ -497,67 +756,69 @@ function rawField(raw, name) {
   return Object.hasOwn(raw, name) ? raw[name] : undefined;
 }
 
-// A recorded value as inert text in a bordered box.
-function rawValueNode(value) {
-  let text = JSON.stringify(value);
-  if (value === undefined) text = "(missing)";
-  else if (value === "") text = "(empty text)";
-  else if (typeof value === "string") text = value;
-  return markAsEvidence(element("code", "raw-value", text));
+// A recorded value as inert text in a box; the box makes spaces at its ends visible.
+function rawValue(value) {
+  if (value === undefined) return element("span", "muted", "(nothing)");
+  if (value === "") return element("span", "muted", "(empty text)");
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return evidence(element("code", "raw-value", text));
 }
 
 function typeValue(finding) {
   const value = element("span", undefined, finding.type);
   const differed = finding.flags.includes("type-nonstandard")
     || finding.flags.includes("type-unknown");
-  if (differed) value.append(" — recorded as ", rawValueNode(rawField(finding.raw, "type")));
+  if (differed) value.append(", recorded as ", rawValue(rawField(finding.raw, "type")));
   return value;
 }
 
 function observedValue(finding) {
-  const value = element("span");
+  const value = element("span", "lines");
   if (finding.observedAt === null) {
-    const recorded = rawValueNode(rawField(finding.raw, "observedAt"));
-    value.append("No valid time. Recorded value: ", recorded);
+    const recorded = rawValue(rawField(finding.raw, "observedAt"));
+    value.append("No valid time. Recorded as ", recorded);
     return value;
   }
-  const local = `${localTime(finding.observedAt)} local time (${timeZoneName()})`;
-  value.append(`${local}\n${finding.observedAt} (UTC)`);
+  const utc = element("time", "data", `${utcText(finding.observedAt, 19)} UTC`);
+  utc.dateTime = finding.observedAt;
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const local = element("span");
+  local.append(dataText(`${localText(finding.observedAt)} ${zone}`));
+  local.append(element("span", "muted", " (this computer)"));
+  value.append(utc, local);
   return value;
 }
 
 // ---------- the source link ----------
 
-// The server already sets sourceUrl only for http(s) addresses. This checks again here,
-// right where the link is made: a javascript: or data: address in an href would run code
-// when clicked, so a second, independent check is worth four lines.
-function isWebUrl(text) {
+// The URL when `text` is a web address that is safe to put in an href, otherwise null.
+// The server already sets sourceUrl only for http(s) addresses; this checks again right
+// where the link is made, because a javascript: or data: address in an href would run
+// code when clicked.
+function webUrl(text) {
   // "http:/x" and "http:x" also parse as http:, but a browser opens them relative to
   // this page's own address, so the text must itself start with the full scheme.
-  if (!/^https?:\/\//i.test(text)) return false;
+  if (typeof text !== "string" || !/^https?:\/\//i.test(text)) return null;
   try {
-    const protocol = new URL(text).protocol;
-    return protocol === "http:" || protocol === "https:";
+    const url = new URL(text);
+    return url.protocol === "http:" || url.protocol === "https:" ? url : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-function sourceValue(finding) {
-  if (typeof finding.sourceUrl === "string" && isWebUrl(finding.sourceUrl)) {
-    return sourceLink(finding.sourceUrl);
+function sourceValue(sourceUrl, recorded) {
+  const url = webUrl(sourceUrl);
+  if (url === null) {
+    const value = element("span", "lines");
+    const reason = element("span", "muted", `Not a link: ${whyNotLink(recorded)}.`);
+    value.append(reason, rawValue(recorded));
+    return value;
   }
-  const recorded = rawField(finding.raw, "sourceUrl");
-  const value = element("span");
-  value.append(`Not a link: ${whyNotLink(recorded)}. Recorded value: `, rawValueNode(recorded));
-  return value;
-}
-
-function sourceLink(url) {
-  // The whole address is the link text, so the analyst sees where it leads before clicking.
-  const link = markAsEvidence(element("a", undefined, url));
-  // The parsed form, so the browser opens exactly the address that was checked.
-  link.href = new URL(url).href;
+  // The whole address is the link text, so the analyst sees where it leads before
+  // clicking. The href is the parsed form: the browser opens exactly what was checked.
+  const link = evidence(element("a", "data", sourceUrl));
+  link.href = url.href;
   // A new tab, and the opened site gets neither a handle on this page nor its address.
   link.target = "_blank";
   link.rel = "noopener noreferrer";
@@ -568,146 +829,365 @@ function whyNotLink(recorded) {
   if (recorded === undefined || recorded === null) return "no source was recorded";
   if (typeof recorded !== "string") return "the recorded value is not text";
   if (recorded.trim() === "") return "the recorded value is empty";
-  if (!URL.canParse(recorded)) return "it is not a full web address (no http:// or https://)";
-  return "its scheme is not http or https, so opening it could run code";
+  if (!/^https?:\/\//i.test(recorded)) return "it does not start with http:// or https://";
+  return "it is not a valid web address";
 }
 
-// ---------- flags and links to other records ----------
+// ---------- flags and actions of a record ----------
 
-function flagList(flags) {
-  if (flags.length === 0) return element("p", "muted", "None.");
-  const list = element("ul");
+function flagExplanations(flags) {
+  if (flags.length === 0) return element("p", "muted", "No problems were found in this record.");
+  const list = element("ul", "explanations");
   for (const flag of flags) {
+    const sentence = FLAG_TEXTS.get(flag)?.[1] ?? "No explanation is available for this flag.";
     const item = element("li");
-    item.append(element("strong", undefined, flagLabel(flag)), ` — ${flagExplanation(flag)}`);
+    item.append(element("span", "flag", flagLabel(flag)), ` ${sentence}`);
     list.append(item);
   }
   return list;
 }
 
-function recordLinks(finding) {
-  const links = [];
+function recordActions(finding) {
+  const actions = element("p", "actions");
+  // A longer entity cannot be searched for: the server refuses a longer query.
+  if (finding.entity !== "" && finding.entity.length <= MAX_QUERY) {
+    const find = () => searchForEntity(finding.entity);
+    actions.append(button("button", "Find all findings with this entity", find));
+  }
   if (finding.duplicateOf !== null) {
-    const text = `Open the original record (${finding.duplicateOf})`;
-    links.push(linkParagraph(text, finding.duplicateOf));
+    const original = finding.duplicateOf;
+    const label = `Open the original record ${original}`;
+    actions.append(button("button", label, () => openRecord(original)));
   }
   // The key of such a record is the id plus a number, so the id finds all its sharers.
-  const sharesId = finding.id !== "" && finding.id !== finding.key;
+  const sharesId = finding.flags.includes("duplicate-id") && finding.id !== "";
   if (sharesId && state.selected !== finding.id) {
-    links.push(linkParagraph(`Show all records with id ${finding.id}`, finding.id));
+    const label = `Show all records with id ${finding.id}`;
+    actions.append(button("button", label, () => openRecord(finding.id)));
   }
-  return links;
+  return actions;
 }
 
-function linkParagraph(text, keyOrId) {
-  const paragraph = element("p");
-  paragraph.append(button(undefined, text, () => selectFinding(keyOrId)));
-  return paragraph;
+// ---------- copying ----------
+
+// `text` is the exact value and the only thing that ever reaches the clipboard. `what`
+// names it for screen readers ("Copy entity") and for the status line.
+function copyButton(text, what) {
+  const node = button("button copy", undefined, () => copyText(node, text, what));
+  node.append(element("span", undefined, "Copy"), element("span", "visually-hidden", ` ${what}`));
+  return node;
 }
 
-// ---------- actions ----------
-
-function selectFinding(keyOrId) {
-  state.selected = keyOrId;
-  writeUrl(true);
-  loadDetail();
-  // Keyboard and screen-reader users land in the panel they just opened.
-  el.detailHeading.focus();
+async function copyText(node, text, what) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // No clipboard on a plain http address other than localhost, or permission refused.
+    el.recordStatus.textContent = "Could not copy: the browser refused. Select the text instead.";
+    return;
+  }
+  const said = `Copied the ${what}.`;
+  node.firstElementChild.textContent = "Copied";
+  node.classList.add("is-copied");
+  el.recordStatus.textContent = said;
+  setTimeout(() => {
+    node.firstElementChild.textContent = "Copy";
+    node.classList.remove("is-copied");
+    if (el.recordStatus.textContent === said) el.recordStatus.textContent = "";
+  }, COPIED_MS);
 }
 
-function closeDetail() {
-  const row = rowsByKey.get(state.selected);
+// ---------- motion ----------
+
+// Runs `update` (a function that changes the page) inside a view transition, so the
+// browser can animate from the old picture to the new one; styles.css says how. `kind`
+// is "open", "close" or "step". Without the API, or when the analyst asked for reduced
+// motion, the change simply happens. A newer transition ends an older one at once, so a
+// fast run of key presses is never held up by an animation.
+function withTransition(kind, update) {
+  if (document.startViewTransition === undefined || reducedMotion.matches) {
+    update();
+    clearOrigin();
+    return;
+  }
+  document.documentElement.dataset.motion = kind;
+  const transition = document.startViewTransition(update);
+  latestTransition = transition;
+  // `ready` rejects when the transition is skipped; that is expected, not an error.
+  transition.ready.catch(() => {});
+  const tidy = () => {
+    if (transition === latestTransition) clearOrigin();
+  };
+  transition.finished.then(tidy, tidy);
+}
+
+// The row whose entity travels to or from the panel title carries this class for the
+// length of the transition. Both ends have the same view-transition-name in styles.css,
+// and a name may be on one element only at a time.
+function clearOrigin() {
+  el.rows.querySelector(".is-origin")?.classList.remove("is-origin");
+}
+
+// ---------- actions: records ----------
+
+function openRecord(name, { push = true, focusPanel = true } = {}) {
+  state.selected = name;
+  writeAddress(push);
+  loadRecord(focusPanel);
+}
+
+function closeRecord() {
   state.selected = "";
-  writeUrl(true);
-  loadDetail();
-  // Back to where the analyst was in the list, or to the search box if that row is gone.
-  const target = row?.querySelector("button.entity") ?? el.query;
-  target.focus();
+  writeAddress(true);
+  loadRecord(false);
 }
 
-// Copies the controls into the state and searches from the first page.
-function searchFromControls(push) {
-  clearTimeout(debounceTimer);
-  state.query = el.query.value;
-  state.type = el.type.value;
-  state.caseId = el.caseId.value;
-  state.duplicates = el.duplicates.checked;
+// Brings the panel in line with state.selected. The row is marked at once; the panel
+// changes when the record has arrived, so there is no flash of a loading state.
+async function loadRecord(focusPanel) {
+  recordAbort?.abort();
+  markSelectedRow();
+  const name = state.selected;
+  if (name === "") {
+    el.record.removeAttribute("aria-busy");
+    showRecord({ status: "closed", name, findings: [], message: "" }, false);
+    return;
+  }
+  const controller = new AbortController();
+  recordAbort = controller;
+  el.record.setAttribute("aria-busy", "true");
+  let record;
+  try {
+    const findings = await fetchRecord(name, controller.signal);
+    record = { status: "ready", name, findings, message: "" };
+  } catch (error) {
+    record = { status: "error", name, findings: [], message: error.message };
+  }
+  if (controller.signal.aborted) return;
+  showRecord(record, focusPanel);
+}
+
+function showRecord(record, focusPanel) {
+  const before = state.record;
+  const wasOpen = before.status !== "closed";
+  const isOpen = record.status !== "closed";
+  if (!wasOpen && !isOpen) return;
+  let kind = "step";
+  if (!wasOpen) kind = "open";
+  if (!isOpen) kind = "close";
+  const hadFocus = el.record.contains(document.activeElement);
+  const row = rowsByKey.get(isOpen ? record.name : before.name);
+  clearOrigin();
+  if (kind === "open") {
+    row?.classList.add("is-origin");
+    scrollBeforeRecord = window.scrollY;
+  }
+  withTransition(kind, () => {
+    state.record = record;
+    renderRecord();
+    row?.classList.toggle("is-origin", kind === "close");
+    if (kind === "close") {
+      returnToList(row, hadFocus);
+      return;
+    }
+    if (narrowScreen.matches) window.scrollTo(0, 0);
+    if (focusPanel || hadFocus) {
+      el.recordContent.querySelector("h2")?.focus({ preventScroll: true });
+    }
+  });
+}
+
+// After the panel closes: on a narrow screen the list comes back where it was, and the
+// focus goes back to the row it came from, if closing left it without a place.
+function returnToList(row, hadFocus) {
+  if (narrowScreen.matches) window.scrollTo(0, scrollBeforeRecord);
+  if (!hadFocus && document.activeElement !== document.body) return;
+  const target = row?.querySelector(".entity") ?? el.heading;
+  target.focus({ preventScroll: true });
+  row?.scrollIntoView({ block: "nearest" });
+}
+
+// The list answers "which findings have this entity"; filters would hide some of them,
+// and so would leaving the re-imported copies out.
+function searchForEntity(entity) {
+  Object.assign(state, { query: entity, type: "", flag: "", caseId: "", duplicates: true });
   state.page = 1;
-  writeUrl(push);
+  syncControls();
+  // On a narrow screen the open record covers the list, so it makes way for the answer.
+  if (narrowScreen.matches) closeRecord();
+  else writeAddress(false);
   runSearch();
 }
 
-function searchAfterPause() {
-  clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => searchFromControls(false), DEBOUNCE_MS);
+// ---------- actions: search, filters, pages ----------
+
+function searchFromFirstPage() {
+  state.page = 1;
+  writeAddress(false);
+  renderFilters();
+  runSearch();
+}
+
+function onQueryInput() {
+  state.query = el.query.value;
+  searchFromFirstPage();
+}
+
+// One choice per row of buttons; pressing the active one again releases it.
+function chooseFilter(name, event) {
+  const node = event.target.closest("button");
+  if (node === null) return;
+  const value = node.dataset.value;
+  state[name] = state[name] === value ? "" : value;
+  searchFromFirstPage();
+}
+
+function clearFilters() {
+  Object.assign(state, { type: "", flag: "", caseId: "" });
+  syncControls();
+  // The button that was pressed is about to be removed; the heading takes the focus.
+  el.heading.focus();
+  searchFromFirstPage();
+}
+
+function retrySearch() {
+  el.heading.focus();
+  runSearch();
 }
 
 function goToPage(page) {
-  state.page = Math.min(Math.max(1, page), lastPage);
-  writeUrl(true);
+  state.page = Math.min(Math.max(1, page), lastPageOf(state.search.total));
+  writeAddress(true);
+  // The top of the new page, for the eyes and for the keyboard.
+  el.heading.focus();
   runSearch();
-  window.scrollTo(0, 0);
 }
 
-// Back and forward buttons: the address changed, so the view follows it. Only the part
-// that really changed is loaded again, so closing a finding does not redraw the list.
-function showStateFromUrl() {
-  clearTimeout(debounceTimer);
+// A click anywhere on a row opens it, not only on the entity button.
+function onRowClick(event) {
+  const row = event.target.closest(".row");
+  if (row === null) return;
+  // Dragging over a note to select it also ends in a click; that must not open the row.
+  const selection = window.getSelection();
+  if (!selection.isCollapsed && row.contains(selection.anchorNode)) return;
+  openRecord(row.dataset.key);
+}
+
+// Back and Forward: the address changed, so the view follows it. Only the part that
+// really changed is loaded again, so closing a record does not redraw the list.
+function onAddressChange() {
   const searchBefore = searchPath();
   const selectedBefore = state.selected;
-  readStateFromUrl();
+  readAddress();
   syncControls();
   if (searchPath() !== searchBefore) runSearch();
-  if (state.selected !== selectedBefore) loadDetail();
+  if (state.selected !== selectedBefore) loadRecord(true);
 }
 
-// ---------- cases for the filter ----------
+// ---------- keyboard ----------
 
-async function loadCases() {
-  try {
-    const body = await fetchJson("/api/cases");
-    if (!Array.isArray(body.cases)) throw new Error("unexpected shape");
-    const options = body.cases.map(
-      (item) => optionNode(`${item.caseId} (${item.findings})`, item.caseId),
-    );
-    el.caseId.replaceChildren(optionNode("All cases", ""), ...options);
-    showCaseInSelect();
-  } catch {
-    // The search still works without the list; say so instead of failing silently.
-    el.caseError.hidden = false;
+// Moves through the rows by `step` (+1 or -1). The focus moves with it, and when a
+// record is open the panel follows, as in a mail program with a preview pane.
+function moveSelection(step) {
+  const keys = state.search.hits.map((hit) => hit.finding.key);
+  if (keys.length === 0) return;
+  const inPanel = el.record.contains(document.activeElement);
+  const from = keys.indexOf(focusedRowKey() ?? (inPanel ? state.selected : undefined));
+  // From outside the list the first press lands on the open record's row, or the first.
+  let to = Math.max(0, keys.indexOf(state.selected));
+  if (from !== -1) to = Math.min(Math.max(0, from + step), keys.length - 1);
+  const key = keys[to];
+  const row = rowsByKey.get(key);
+  if (inPanel) row.scrollIntoView({ block: "nearest" });
+  else row.querySelector(".entity").focus();
+  // Stepping replaces the address instead of adding to the history: Back should close
+  // the record, not walk back through every row that was passed.
+  if (state.selected !== "" && state.selected !== key) {
+    openRecord(key, { push: false, focusPanel: inPanel });
+  }
+}
+
+// +1, -1 or 0: whether this key press moves through the rows. j and k work anywhere
+// outside a text field; the arrows only on a row (and Down in the search field), so that
+// elsewhere they keep scrolling the page or the record.
+function stepOf(event, inField) {
+  const onRow = event.target.closest(".row") !== null;
+  if (event.shiftKey) return 0;
+  if (event.key === "j" && !inField) return 1;
+  if (event.key === "k" && !inField) return -1;
+  if (event.key === "ArrowDown" && (onRow || event.target === el.query)) return 1;
+  if (event.key === "ArrowUp" && onRow) return -1;
+  return 0;
+}
+
+function onEscape(event) {
+  if (state.selected !== "") closeRecord();
+  else if (event.target === el.query && el.query.value !== "") {
+    el.query.value = "";
+    onQueryInput();
+  } else return;
+  event.preventDefault();
+}
+
+function onKeydown(event) {
+  // The shortcuts are single keys. With Ctrl, Alt or Meta the key belongs to the browser
+  // or the system, and during IME composition it belongs to the input method.
+  if (event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return;
+  const inField = event.target === el.query || event.target === el.caseSelect;
+  const step = stepOf(event, inField);
+  if (event.key === "Escape") {
+    onEscape(event);
+  } else if (event.key === "/" && !inField) {
+    // Without this the "/" would also be typed into the field.
+    event.preventDefault();
+    el.query.focus();
+    el.query.select();
+  } else if (step !== 0) {
+    event.preventDefault();
+    moveSelection(step);
   }
 }
 
 // ---------- start ----------
 
-function listenToControls() {
-  el.query.addEventListener("input", searchAfterPause);
-  el.query.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") searchFromControls(false);
+function listen() {
+  el.query.addEventListener("input", onQueryInput);
+  el.types.addEventListener("click", (event) => chooseFilter("type", event));
+  el.flags.addEventListener("click", (event) => chooseFilter("flag", event));
+  el.duplicates.addEventListener("change", () => {
+    state.duplicates = el.duplicates.checked;
+    searchFromFirstPage();
   });
-  el.type.addEventListener("change", () => searchFromControls(true));
-  el.caseId.addEventListener("change", () => searchFromControls(true));
-  el.duplicates.addEventListener("change", () => searchFromControls(true));
-  el.retry.addEventListener("click", runSearch);
+  el.caseSelect.addEventListener("change", () => {
+    state.caseId = el.caseSelect.value;
+    searchFromFirstPage();
+  });
+  el.rows.addEventListener("click", onRowClick);
   el.previous.addEventListener("click", () => goToPage(state.page - 1));
   el.next.addEventListener("click", () => goToPage(state.page + 1));
-  el.openAsId.addEventListener("click", () => selectFinding(state.query.trim()));
-  el.closeDetail.addEventListener("click", closeDetail);
-  // Escape closes the panel, but only when the focus is inside it: in the search box
-  // Escape already means "clear the box".
-  el.detail.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.selected !== "") closeDetail();
+  el.closeRecord.addEventListener("click", closeRecord);
+  document.addEventListener("keydown", onKeydown);
+  window.addEventListener("popstate", onAddressChange);
+}
+
+// styles.css lets the record panel use the whole window height only once the top band
+// has scrolled away; while the band is on screen the panel has to end above the footer.
+function watchBand() {
+  const observer = new IntersectionObserver(([entry]) => {
+    document.body.classList.toggle("band-gone", !entry.isIntersecting);
   });
-  window.addEventListener("popstate", showStateFromUrl);
+  observer.observe(el.band);
 }
 
 function start() {
-  listenToControls();
-  el.zoneNote.textContent = `Times in the list are in your local time zone (${timeZoneName()}).`;
-  readStateFromUrl();
+  buildFlagButtons();
+  listen();
+  watchBand();
+  readAddress();
   syncControls();
+  renderResults();
   runSearch();
-  loadDetail();
+  loadRecord(true);
   loadCases();
 }
 
