@@ -193,3 +193,49 @@ Authentication, rate limiting, SSE, subscriptions, tool-list pagination, output
 schemas, CORS (so a browser client on another origin cannot call it). The
 argument checker handles only what the three tools use; it is not a general
 JSON Schema validator.
+
+## 25. UI: three static files, no framework, no build step
+
+`index.html`, `app.js`, `styles.css`, served by the same Express app. The task
+says the interface must be usable and correct, not pretty. One search box, two
+filters, a list and a detail panel do not need a framework, and with no build
+step what is in the repository is what runs in the browser.
+
+## 26. Untrusted text is only ever set as text
+
+The UI never uses `innerHTML` or anything like it. Every element is created
+with `createElement` and filled with `textContent`. A highlight is a `<mark>`
+element made the same way, by cutting the original string at the offsets the
+server returns. A note containing a script tag is shown as the characters of a
+script tag.
+
+The page works under the strict Content-Security-Policy from decision 17, so an
+escaping bug would still not run inline script.
+
+## 27. The source link is checked twice
+
+The server only passes on a source URL that parses as http or https. The UI
+checks the protocol again before making a link, and opens it with
+`rel="noopener noreferrer"`. Anything else (`javascript:`, `data:`, empty, no
+scheme) is shown as plain text with a note saying it is not a link.
+
+## 28. Detail panel beside the list, English labels
+
+The analyst keeps their place in the list while reading a finding. On a narrow
+screen the panel takes over the view. Labels are in English, like the code and
+the README.
+
+## 29. Search state lives in the URL
+
+Query, filters, page and the open finding are in the address, so a search can
+be bookmarked or sent to a colleague and the back button works. The values are
+read defensively, since anyone can edit a URL.
+
+## 30. Docker: one service, no build stage, loopback only
+
+Node 26 runs the TypeScript directly, so the image has no compiler and no
+second stage. Production dependencies only, unprivileged user, read-only file
+system, no capabilities.
+
+The port is published on 127.0.0.1 only, because the app has no login. `PORT`
+picks another host port when 3000 is taken.

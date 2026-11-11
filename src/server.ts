@@ -2,6 +2,7 @@
 // Run with: npm start (PORT, HOST, FINDINGS_PATH and MCP_ALLOWED_ORIGINS are optional
 // environment variables).
 
+import { fileURLToPath } from "node:url";
 import express from "express";
 import type { ErrorRequestHandler, RequestHandler } from "express";
 import { loadFindings } from "./data/load.ts";
@@ -19,6 +20,10 @@ const HOST = process.env.HOST ?? "127.0.0.1";
 // Web origins that may call /mcp from a browser, besides pages served from this machine.
 // Exact origins separated by commas, e.g. MCP_ALLOWED_ORIGINS=https://tools.example
 const MCP_ALLOWED_ORIGINS = parseAllowedOrigins(process.env.MCP_ALLOWED_ORIGINS);
+
+// Resolved from this file's own location, not from the directory the server was started
+// in, so `node src/server.ts` serves the same files from anywhere.
+const PUBLIC_DIR = fileURLToPath(new URL("../public", import.meta.url));
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
@@ -80,9 +85,10 @@ app.use(setSecurityHeaders);
 app.use("/api", createApiRouter(store, search));
 // The same store and search as the API, so the two interfaces cannot disagree.
 app.use("/mcp", createMcpRouter(store, search, MCP_ALLOWED_ORIGINS));
-// A later step mounts the static UI here: after the routers above and before the two
-// handlers below, which must stay last. No CORS headers on purpose: the only browser
-// client is the same-origin UI.
+// The browser UI: three static files. Mounted after the routers above, so a file can
+// never shadow /api or /mcp, and before the two handlers below, which must stay last.
+// No CORS headers on purpose: the only browser client is this same-origin UI.
+app.use(express.static(PUBLIC_DIR));
 app.use(handleNotFound);
 app.use(handleError);
 
