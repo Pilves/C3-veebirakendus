@@ -403,9 +403,37 @@ describe("filters", () => {
     assert.deepEqual(keysOf(search({ query: "one", caseId: "C-1", type: "domain" })), ["T-1"]);
   });
 
-  test("the query does not search case ids or ids", () => {
+  test("the query does not search case ids", () => {
     assert.equal(search({ query: "C-2" }).total, 0);
-    assert.equal(search({ query: "T-1" }).total, 0);
+  });
+});
+
+describe("ids and keys", () => {
+  const search = searchOf([
+    { id: "T-1", entity: "one.test", notes: "first" },
+    { id: "T-10", entity: "ten.test", notes: "mentions T-1 in passing" },
+    { id: "T-7", entity: "shared-a.test" },
+    { id: "T-7", entity: "shared-b.test" },
+  ]);
+
+  test("a whole id finds its finding, in any letter case, ahead of a mention in notes", () => {
+    assert.deepEqual(keysOf(search({ query: "t-1" })), ["T-1", "T-10"]);
+    assert.equal(search({ query: "T-1" }).hits[0]?.tier, 0);
+  });
+
+  test("part of an id finds nothing", () => {
+    assert.equal(search({ query: "10" }).total, 0);
+    assert.equal(search({ query: "-7" }).total, 0);
+  });
+
+  test("a shared id finds every record with it, and a key finds one", () => {
+    assert.deepEqual(keysOf(search({ query: "T-7" })), ["T-7.1", "T-7.2"]);
+    assert.deepEqual(keysOf(search({ query: "T-7.2" })), ["T-7.2"]);
+  });
+
+  test("an id combines with other words", () => {
+    assert.deepEqual(keysOf(search({ query: "T-10 passing" })), ["T-10"]);
+    assert.equal(search({ query: "T-10 first" }).total, 0);
   });
 });
 

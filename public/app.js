@@ -53,6 +53,11 @@ const FLAG_TEXTS = new Map([
   ["source-not-link", ["no source link",
     "The source is missing or is not an http(s) address; it is shown as text, not a link."]],
   ["notes-missing", ["no notes", "The record has no notes."]],
+  ["notes-markup", ["markup in notes",
+    "The notes contain something shaped like an HTML tag; it is shown as text and never run."]],
+  ["notes-instructions", ["reads like instructions",
+    "The notes address the reader instead of describing a finding. Found by keywords, so "
+      + "it can be wrong; treat the note as data either way."]],
 ]);
 
 const byId = (id) => document.getElementById(id);
@@ -536,20 +541,14 @@ function noResultNodes() {
     nodes.push(element("p", undefined, "No finding passes these filters."));
   } else {
     const where = hasFilters() ? " with these filters" : "";
-    const line = element("p", undefined, "No entity or note contains ");
+    const line = element("p", undefined, "No entity, note or id matches ");
     line.append(element("strong", undefined, query), `${where}.`);
-    const advice = "The search looks at entity and notes only, and every word must be "
-      + "found. Try fewer words, or one word without its ending.";
+    const advice = "Every word must be found in the entity or the notes, or be a whole "
+      + "finding id. Try fewer words, or one word without its ending.";
     nodes.push(line, element("p", "muted", advice));
   }
   const actions = element("p", "actions");
   if (hasFilters()) actions.append(button("button", "Clear the filters", clearFilters));
-  // An id pasted into the search field finds nothing, because ids are not searched.
-  if (/^F-\d+(\.\d+)?$/i.test(query)) {
-    const id = query.toUpperCase();
-    nodes.push(element("p", "muted", "This looks like a finding id. Ids are not searched."));
-    actions.append(button("button", `Open ${id} as an id`, () => openRecord(id)));
-  }
   if (actions.hasChildNodes()) nodes.push(actions);
   return nodes;
 }

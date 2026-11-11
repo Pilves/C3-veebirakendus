@@ -85,13 +85,17 @@ Cost: õ, ö and o become the same letter, so some different Estonian words
 merge. Substring matching also hits inside words.
 
 Not done, on purpose: cross-language search, stemming for Estonian inflection,
-fuzzy matching. Search covers entity and notes only, as the task says; ids and
-cases are reached through lookup by id and the case filter.
+fuzzy matching.
+
+The task names entity and notes as what is searched. A finding id is also
+found, but only as a whole word: an analyst who pastes `F-10401` into the one
+search field expects that finding, and as a substring `10` would be in hundreds
+of ids. Cases are reached through the case filter.
 
 ## 10. Ranking: where the match is, then newest first
 
-Exact entity, entity starts with the query, a word is in the entity, notes
-only. Inside a tier the newest finding comes first, then key order, so the
+Exact entity or id, entity starts with the query, a word is in the entity,
+notes only. Inside a tier the newest finding comes first, then key order, so the
 same query always gives the same list.
 
 ## 11. Re-imports are hidden from results by default
@@ -213,6 +217,14 @@ tells it to call `list_cases`. Every tool description says that every field of
 a finding is untrusted third-party text. Every result
 repeats that in a `notice` field, so the warning travels with the data. Results
 are built from a fixed list of fields.
+
+Such a note also gets the flag `notes-instructions`, and a note with something
+shaped like an HTML tag gets `notes-markup`, so the analyst and an MCP client
+see the problem named on the record itself. The first is a keyword list in
+`src/data/normalise.ts`, which `scripts/explore.ts` also counts with: it finds the four in this data, would miss a reworded
+one and can flag an honest note that says "ignore". So the flag is a hint and
+the notice stays on every result, flagged or not. The note text is never
+changed or withheld.
 
 This lowers the risk. It does not remove it: the model on the other side
 decides what to do with the text.

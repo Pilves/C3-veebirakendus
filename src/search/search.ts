@@ -12,8 +12,8 @@ import type { Finding, FindingType, Flag } from "../data/normalise.ts";
 // original.slice(start, end) is exactly the text to highlight.
 export type HighlightRange = { start: number; end: number };
 
-// 0: entity equals the query, 1: entity starts with it, 2: some term is in the entity,
-// 3: everything else (matched in the notes only, or an empty query).
+// 0: entity, id or key equals the query, 1: entity starts with it, 2: some term is in the
+// entity, 3: everything else (matched in the notes only, or an empty query).
 export type Tier = 0 | 1 | 2 | 3;
 
 export type SearchOptions = {
@@ -130,6 +130,9 @@ type Prepared = {
   // be an exact match for its own text.
   entityPhrase: string;
   notes: FoldedText;
+  // The folded id and key. A record that shares its id has a key of its own ("F-1.2");
+  // otherwise the two are the same text.
+  names: string[];
 };
 
 function prepare(finding: Finding): Prepared {
@@ -139,14 +142,23 @@ function prepare(finding: Finding): Prepared {
     entity,
     entityPhrase: wordsOf(entity.text).join(" "),
     notes: foldText(finding.notes ?? ""),
+    names: [foldText(finding.id).text, foldText(finding.key).text],
   };
+}
+
+// An id or key matches only as a whole. As a substring "10" would be in hundreds of ids
+// and "f-1" in all of them, and every search for a number would drown in them.
+function isNameOf(item: Prepared, term: string): boolean {
+  return item.names.includes(term);
 }
 
 // AND: every term must be somewhere, but each term may be in a different field.
 // With no terms the loop never runs and everything matches: that is the browse mode.
 function matchesAllTerms(item: Prepared, terms: string[]): boolean {
   for (const term of terms) {
-    if (!item.entity.text.includes(term) && !item.notes.text.includes(term)) return false;
+    const found =
+      item.entity.text.includes(term) || item.notes.text.includes(term) || isNameOf(item, term);
+    if (!found) return false;
   }
   return true;
 }
@@ -155,7 +167,7 @@ function matchesAllTerms(item: Prepared, terms: string[]): boolean {
 function tierOf(item: Prepared, query: ParsedQuery): Tier {
   // Checked first because every string starts with "", which would make browse tier 1.
   if (query.terms.length === 0) return 3;
-  if (item.entityPhrase === query.phrase) return 0;
+  if (item.entityPhrase === query.phrase || isNameOf(item, query.phrase)) return 0;
   if (item.entityPhrase.startsWith(query.phrase)) return 1;
   if (query.terms.some((term) => item.entity.text.includes(term))) return 2;
   return 3;

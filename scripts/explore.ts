@@ -2,6 +2,7 @@
 // Run from the repo root: node scripts/explore.ts
 // The dataset is untrusted: every value is only counted or printed (truncated), never interpreted.
 import { readFileSync } from "node:fs";
+import { INSTRUCTIONS, MARKUP } from "../src/data/normalise.ts";
 
 // Fields are `unknown` because the data is not uniform (null, arrays, numbers, missing keys).
 type Raw = { [key: string]: unknown };
@@ -322,6 +323,18 @@ const oddCases = findings.filter(
 for (const f of oddCases) {
   out(`      ${f.id}  caseId=${show(f.caseId)}`);
 }
+// A record with a list of cases counts in each of them, as it does in the app.
+const casesOfEntity = new Map<string, Set<string>>();
+for (const f of findings) {
+  const cases = Array.isArray(f.caseId) ? f.caseId : [f.caseId];
+  for (const value of cases) {
+    if (typeof value !== "string" || norm(f.entity) === "") continue;
+    const seen = casesOfEntity.get(norm(f.entity)) ?? new Set<string>();
+    casesOfEntity.set(norm(f.entity), seen.add(caseNorm(value)));
+  }
+}
+const inSeveralCases = [...casesOfEntity.values()].filter((cases) => cases.size > 1);
+out(`  entities (trim + lowercase) seen in more than one case: ${inSeveralCases.length}`);
 
 out("\n== 6. observedAt ==");
 printGroups(findings, (f) => timeFormat(f.observedAt), false);
@@ -364,34 +377,18 @@ printCount(
   findings.filter((f) => "notes" in f && f.notes !== null && typeof f.notes !== "string"),
 );
 const texts = findings.filter(isText);
-const HTML_TAG = /<\/?[a-z][^>]*>/i;
 const HTML_ENTITY = /&(#\d+|#x[0-9a-f]+|[a-z]+);/i;
-printCount("contain something like an HTML tag", texts.filter((f) => HTML_TAG.test(note(f))));
+printCount("contain something like an HTML tag", texts.filter((f) => MARKUP.test(note(f))));
 printCount(
   "contain an HTML entity (&lt; &#60; ...)",
   texts.filter((f) => HTML_ENTITY.test(note(f))),
 );
-for (const f of texts.filter((f) => HTML_TAG.test(note(f)) || HTML_ENTITY.test(note(f)))) {
+for (const f of texts.filter((f) => MARKUP.test(note(f)) || HTML_ENTITY.test(note(f)))) {
   out(`      ${f.id}  ${show(f.notes)}`);
 }
-// Keyword heuristic only: it flags wording that addresses a reader/assistant
-// instead of describing a finding.
-const INJECTION = new RegExp(
-  [
-    "\\bignore\\b",
-    "\\bdisregard\\b",
-    "^system:",
-    "system prompt",
-    "\\bassistant\\b",
-    "\\bAI\\b",
-    "\\binstructions?\\b",
-    "reply (only )?with",
-    "do not mention",
-    "you (must|should)",
-  ].join("|"),
-  "i",
-);
-const injections = texts.filter((f) => INJECTION.test(note(f)));
+// The same keyword rule the app flags with: wording that addresses a reader or an
+// assistant instead of describing a finding.
+const injections = texts.filter((f) => INSTRUCTIONS.test(note(f)));
 out(`  look like instructions to an AI assistant (keyword heuristic): ${injections.length}`);
 for (const f of injections) {
   out(`      ${f.id}  ${show(f.notes, 60)}`);

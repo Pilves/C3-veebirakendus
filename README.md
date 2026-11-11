@@ -90,9 +90,9 @@ The reasoning behind each choice, with what it costs, is in
 - **Normalise once, never destroy.** Every record keeps its raw value, gets cleaned
   fields beside it and a list of flags naming what was wrong.
 - **Search is a folded substring match.** Text and query are lowercased and stripped of
-  diacritics; several words must all match. Results are ranked by where the match is
-  (entity equals the query, starts with it, contains a word, notes only) and then newest
-  first.
+  diacritics; several words must all match. A word that is a whole finding id also
+  matches that finding. Results are ranked by where the match is (entity or id equals
+  the query, entity starts with it, contains a word, notes only) and then newest first.
 - **Highlights are positions, not markup.** The server returns plain text and the
   offsets to highlight. No HTML is built anywhere on the server.
 - **Express 5** is the only runtime dependency.
@@ -116,13 +116,13 @@ ids, 30 re-imports, so 1002 findings are shown by default.
 | Timestamps in three formats: ISO with Z (730), ISO with +02:00 or +03:00 (180), milliseconds as a number (122) | all | All become UTC; not flagged, nothing is wrong with them |
 | Source that is not a web link (`javascript:`, `data:`, empty, no scheme) | 4 | Shown as text, never as a link |
 | Notes missing (4) or `null` (3) | 7 | `null`, flagged |
-| Notes containing HTML or script | 6 | Shown as the literal characters |
-| Notes written as instructions to an AI assistant | 4 | Returned as data, with a warning in every MCP result |
+| Notes containing something shaped like an HTML tag | 6 | Shown as the literal characters, flagged |
+| Notes written as instructions to an AI assistant | 4 | Returned as data and flagged by a keyword rule, with a warning in every MCP result |
 | Entity with surrounding whitespace | 4 | Trimmed and flagged |
 
 Things that are not errors but worth knowing:
 
-- 61 entities appear in more than one case. The UI can list all findings for an entity.
+- 62 entities appear in more than one case. The UI can list all findings for an entity.
 - The same entity in the same case at different times is a repeat observation, not a
   duplicate, and is kept as separate findings.
 - About two thirds of the notes are English and one third Estonian.
@@ -198,8 +198,9 @@ three. Also left out: SSE, subscriptions, pagination of the tool list, output sc
   server and again in the UI, and opened without a referrer.
 - **DNS rebinding:** requests whose Host header is not local are refused, on every path.
 - **Prompt injection:** the MCP tool descriptions and every result say that finding text
-  is untrusted data. This lowers the risk; it cannot remove it, because the model on the
-  other side decides what to do with the text.
+  is untrusted data, and a note that reads like instructions carries a flag. The flag
+  is a keyword rule and can miss a reworded note. All of this lowers the risk; it cannot
+  remove it, because the model on the other side decides what to do with the text.
 - **Not done:** authentication, an access log, rate limiting. A real investigation tool
   needs all three.
 

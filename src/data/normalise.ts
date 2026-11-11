@@ -27,6 +27,8 @@ export const FLAGS = [
   "time-invalid",
   "source-not-link",
   "notes-missing",
+  "notes-markup",
+  "notes-instructions",
 ] as const;
 
 export type Flag = (typeof FLAGS)[number];
@@ -277,12 +279,42 @@ function isWebUrl(text: string): boolean {
 
 // ---------- notes ----------
 
+// Something shaped like an HTML tag: "<b>", "</script>", "<img src=x>". The length of a
+// tag is bounded, so a long run of "<a<a<a" is still read in one pass.
+// Exported, like INSTRUCTIONS below, so scripts/explore.ts counts with the same rule.
+export const MARKUP = /<\/?[a-z][^<>]{0,500}>/i;
+
+// Wording that addresses whoever reads the note instead of describing a finding. A list
+// of keywords, not understanding: it can miss a reworded instruction and it can flag an
+// honest note that says "ignore". The flag is a hint for the reader and never a filter,
+// and the absence of the flag is not a promise that a note is harmless.
+export const INSTRUCTIONS = new RegExp(
+  [
+    "\\bignore\\b",
+    "\\bdisregard\\b",
+    "^system:",
+    "system prompt",
+    "\\bassistant\\b",
+    "\\bAI\\b",
+    "\\binstructions?\\b",
+    "reply (only )?with",
+    "do not mention",
+    "you (must|should)",
+  ].join("|"),
+  "i",
+);
+
 // Notes are kept byte-for-byte. Escaping is the job of whoever displays them; stripping
-// tags here would destroy evidence and still not make the text safe to render.
+// tags here would destroy evidence and still not make the text safe to render. Suspect
+// content is flagged, so the analyst and an MCP client see it named on the record.
 function cleanNotes(raw: unknown, flags: Flag[]): string | null {
-  if (typeof raw === "string") return raw;
-  flags.push("notes-missing");
-  return null;
+  if (typeof raw !== "string") {
+    flags.push("notes-missing");
+    return null;
+  }
+  if (MARKUP.test(raw)) flags.push("notes-markup");
+  if (INSTRUCTIONS.test(raw)) flags.push("notes-instructions");
+  return raw;
 }
 
 // ---------- re-imports ----------

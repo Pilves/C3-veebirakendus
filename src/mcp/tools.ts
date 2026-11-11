@@ -85,10 +85,11 @@ const SEARCH_FINDINGS: ToolDefinition = {
   name: "search_findings",
   title: "Search findings",
   description:
-    "Free-text search over investigation findings, matching the entity and the notes. " +
+    "Free-text search over investigation findings, matching the entity and the notes; a " +
+    "word that is a whole finding id or key matches that finding too. " +
     "All words of the query must match; letter case and diacritics are ignored. An " +
     "empty query lists everything that passes the filters. Results are ranked (tier 0 " +
-    "is an exact entity match, tier 3 a match in the notes only) and paged with limit " +
+    "is an exact entity or id match, tier 3 a match in the notes only) and paged with limit " +
     `and offset; "total" is the number of matches before paging. ${UNTRUSTED}`,
   inputSchema: {
     type: "object",
@@ -96,7 +97,7 @@ const SEARCH_FINDINGS: ToolDefinition = {
       query: {
         type: "string",
         maxLength: MAX_QUERY_LENGTH,
-        description: 'Words to look for in entity and notes. "" matches everything.',
+        description: 'Words to look for in entity and notes, or a finding id. "" matches everything.',
       },
       type: {
         type: "string",
