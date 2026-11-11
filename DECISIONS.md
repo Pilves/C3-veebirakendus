@@ -177,7 +177,14 @@ methods and one chain of checks, so I wrote it by hand. Each rule in the code
 names the spec page and phrase it implements.
 
 Cost: conformance is on me. `scripts/mcp-check.sh` runs about a hundred checks
-against a running server. Nothing was tested with a real MCP client, only curl.
+against a running server.
+
+Tested with two real clients in their 2026-07-28 mode: the official SDK client
+(`@modelcontextprotocol/client` 2.4.0) and the MCP Inspector CLI 2.14.0.
+Discovery, the tool list and all three tools worked with both, and the SDK
+honoured the cache hints. A client in its older default mode sends
+`initialize` and gets the documented refusal, and it shows the user the
+message that names the supported version.
 
 ## 21. Order of the MCP checks
 
@@ -331,8 +338,8 @@ out of scope.
 `npm test` covers the normaliser, the store, the search, the MCP rules and the
 tool handlers. The HTTP routes and the MCP router are exercised by
 `scripts/mcp-check.sh` against a running server, not by the unit tests, and the
-UI has no automated tests in the repository. Nothing was tested with a real MCP
-client.
+UI has no automated tests in the repository. The real-client test in decision
+20 was run by hand and is not part of the repository.
 
 ## 36. Filters show their counts
 

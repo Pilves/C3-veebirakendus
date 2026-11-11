@@ -58,9 +58,12 @@ bash scripts/mcp-check.sh http://127.0.0.1:3000
 That script sends about a hundred requests to `/mcp` with curl and prints PASS or FAIL
 for each rule of the protocol. It needs bash, curl and node.
 
-What is not tested automatically: the HTTP routes and the MCP router are covered by the
-script above, not by `npm test`; the UI has no automated tests in the repository; nothing
-was tested with a real MCP client.
+The endpoint was also tried by hand with two real clients in their 2026-07-28 mode: the
+official SDK client (`@modelcontextprotocol/client` 2.4.0) and the MCP Inspector CLI
+2.14.0. Discovery, the tool list and all three tools worked with both. Clients default to
+the older protocol, so the Inspector needs `--protocol-era modern`.
+
+What is not tested automatically: the UI has no automated tests in the repository.
 
 ## How it is built
 
@@ -202,7 +205,7 @@ three. Also left out: SSE, subscriptions, pagination of the tool list, output sc
 ## Not done
 
 - Cross-language search and Estonian stemming.
-- Automated UI tests, and a test with a real MCP client.
+- Automated UI tests.
 - Authentication, audit logging, rate limiting.
 
 ## AI tools
