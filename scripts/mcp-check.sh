@@ -128,6 +128,16 @@ META=$(meta)
 # req <id> <method>: a request with no parameters of its own.
 req() { printf '{"jsonrpc":"2.0","id":%s,"method":"%s","params":{%s}}' "$1" "$2" "$META"; }
 
+# Before the checks: make sure the thing answering at this address is this server at all.
+# Another program on the same port would otherwise show up as a hundred confusing FAILs.
+if ! curl -s -m 5 -X POST -H "$JSON" -H "$PV" -H 'Mcp-Method: server/discover' \
+  -d "$(req 0 server/discover)" "$URL" | grep -q '"supportedVersions"'; then
+  echo "No MCP server answered at $URL."
+  echo "Is the server running, and on this port? Another program may be using it."
+  echo "Try: PORT=3100 npm start   and   scripts/mcp-check.sh http://127.0.0.1:3100"
+  exit 1
+fi
+
 # call <id> <tool> <arguments-json>: a tools/call request.
 call() {
   printf '{"jsonrpc":"2.0","id":%s,"method":"tools/call",' "$1"

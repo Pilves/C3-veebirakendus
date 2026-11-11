@@ -9,6 +9,7 @@ import { Router } from "express";
 import type { ErrorRequestHandler, Request } from "express";
 import { VALID_TYPES } from "../data/normalise.ts";
 import type { Finding, FindingType } from "../data/normalise.ts";
+import { publicFinding } from "../data/public.ts";
 import type { Store } from "../data/store.ts";
 import type { Search, SearchOptions } from "../search/search.ts";
 
@@ -76,23 +77,6 @@ function searchOptionsOf(request: Request): SearchOptions {
 }
 
 // ---------- shaping the answers ----------
-
-// Every field is named, instead of copying the finding and deleting `raw`: a field
-// added to Finding later stays private until someone adds it here on purpose.
-function publicFinding(finding: Finding) {
-  return {
-    key: finding.key,
-    id: finding.id,
-    entity: finding.entity,
-    type: finding.type,
-    caseIds: finding.caseIds,
-    observedAt: finding.observedAt,
-    sourceUrl: finding.sourceUrl,
-    notes: finding.notes,
-    duplicateOf: finding.duplicateOf,
-    flags: finding.flags,
-  };
-}
 
 // The detail view also shows the record as it was originally recorded.
 function detailedFinding(finding: Finding) {

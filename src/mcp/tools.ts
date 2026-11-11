@@ -15,7 +15,8 @@
 // needs its own defences (for example, asking the user before a tool call).
 
 import { VALID_TYPES } from "../data/normalise.ts";
-import type { Finding, FindingType } from "../data/normalise.ts";
+import type { FindingType } from "../data/normalise.ts";
+import { publicFinding } from "../data/public.ts";
 import type { Store } from "../data/store.ts";
 import type { Search } from "../search/search.ts";
 
@@ -239,23 +240,6 @@ function success(fields: object): ToolResult {
 // The JSON-RPC call itself succeeded, so these go out with HTTP 200.
 function failure(message: string): ToolResult {
   return { content: [{ type: "text", text: message }], isError: true };
-}
-
-// The same named list of fields as publicFinding in src/http/api.ts: a field added to
-// Finding later stays private until someone adds it here on purpose.
-function publicFinding(finding: Finding) {
-  return {
-    key: finding.key,
-    id: finding.id,
-    entity: finding.entity,
-    type: finding.type,
-    caseIds: finding.caseIds,
-    observedAt: finding.observedAt,
-    sourceUrl: finding.sourceUrl,
-    notes: finding.notes,
-    duplicateOf: finding.duplicateOf,
-    flags: finding.flags,
-  };
 }
 
 // ---------- the handlers ----------
