@@ -1,6 +1,6 @@
 /* An evidence ledger: one ruled list, hairlines instead of boxes, monospace for the
    values an analyst cites and nowhere else. Every colour, space and duration has a name
-   in :root, so the dark scheme changes values and never rules.
+   in :root. The page has one scheme, a light one.
 
    Sections: tokens, base, shared pieces, top band, filters, layout, results, record
    panel, footer, narrow screens, touch, motion, forced colours. */
@@ -8,30 +8,31 @@
 /* ---------- tokens ---------- */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
-  /* Colour roles. Text on its ground is at least 4.5:1, control edges at least 3:1. */
-  --ground: #f5f6f8; /* the desk: page background */
-  --surface: #ffffff; /* paper: the record sheet and the controls */
-  --ink: #14171c;
-  --ink-muted: #505762;
-  --rule: #d5d9e0; /* hairlines between records */
-  --edge: #767e8b; /* boundaries of controls */
-  --hover: #eceef2;
-  --press: #e0e3e9;
-  --accent: #2336c0; /* ultramarine: selection, focus and links only */
-  --accent-ink: #1b2a9c;
-  --accent-ground: #e2e7fb;
-  --mark-ground: #ffe35a; /* highlighter; always paired with an underline */
-  --mark-ink: #14171c;
-  --mark-rule: #14171c;
-  --flag-ink: #7a4800; /* amber: data-quality flags */
-  --flag-edge: #b0731a;
-  --danger: #a1201a;
-  --select-ground: #2336c0;
+  /* Colour roles: fig ink on warm paper, with a saffron highlighter. Text on its ground
+     is at least 4.5:1, control edges at least 3:1. */
+  --ground: #faf5f3; /* the desk: page background */
+  --surface: #fffdfb; /* paper: the record sheet and the controls */
+  --ink: #251a2e; /* aubergine, not black */
+  --ink-muted: #63566b;
+  --rule: #e4d9db; /* hairlines between records */
+  --edge: #8a7a8c; /* boundaries of controls */
+  --hover: #f3ebea;
+  --press: #eaddde;
+  --accent: #86175f; /* fig: selection, focus and links only */
+  --accent-ink: #6a0f4a;
+  --accent-ground: #f8e1ee;
+  --mark-ground: #ffd95e; /* saffron highlighter; always paired with an underline */
+  --mark-ink: #251a2e;
+  --mark-rule: #251a2e;
+  --flag-ink: #7c4400; /* amber: data-quality flags */
+  --flag-edge: #b9731d;
+  --danger: #b0241c;
+  --select-ground: #86175f;
   --select-ink: #ffffff;
-  --tap: rgb(35 54 192 / 0.14);
-  --shadow: 0 12px 28px -14px rgb(20 23 28 / 0.32);
+  --tap: rgb(134 23 95 / 0.14);
+  --shadow: 0 12px 28px -14px rgb(37 26 46 / 0.32);
 
   /* Type. Sans for the interface, monospace for data only. */
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
@@ -64,34 +65,6 @@
   --open-time: 220ms;
   --close-time: 176ms; /* leaving is about a fifth quicker than arriving */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --ground: #101216;
-    --surface: #171a20;
-    --ink: #e8eaee;
-    --ink-muted: #a3aab5;
-    --rule: #2b3038;
-    --edge: #6f7785;
-    --hover: #1b1f26;
-    --press: #242932;
-    --accent: #a6b4ff;
-    --accent-ink: #c9d1ff;
-    --accent-ground: #1e2552;
-    /* A bright yellow block glares on a dark page. The ground is dimmed and the
-       underline carries the highlighter yellow instead. */
-    --mark-ground: #5a4a05;
-    --mark-ink: #fff4bf;
-    --mark-rule: #f2d34b;
-    --flag-ink: #f0b756;
-    --flag-edge: #9a6f24;
-    --danger: #ff9d92;
-    --select-ground: #a6b4ff;
-    --select-ink: #101216;
-    --tap: rgb(166 180 255 / 0.18);
-    --shadow: 0 12px 28px -14px rgb(0 0 0 / 0.8);
-  }
 }
 
 /* ---------- base ---------- */
