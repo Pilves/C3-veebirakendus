@@ -46,7 +46,7 @@ const setSecurityHeaders: RequestHandler = (_request, response, next) => {
 };
 
 // Findings are investigation data: an answer must not stay in the browser's disk cache
-// after the tool is closed. The three static files hold no data and keep the default.
+// after the tool is closed. The static files hold no data and keep the default.
 const forbidCaching: RequestHandler = (_request, response, next) => {
   response.set("Cache-Control", "no-store");
   next();
@@ -89,7 +89,7 @@ export function createApp(store: Store, search: Search, allowedHosts: string[]):
   app.use(["/api", "/mcp"], forbidCaching);
   app.use("/api", createApiRouter(store, search));
   app.use("/mcp", createMcpRouter(store, search));
-  // The browser UI: three static files. Mounted after the routers above, so a file can
+  // The browser UI: static files. Mounted after the routers above, so a file can
   // never shadow /api or /mcp, and before the two handlers below, which must stay last.
   // No CORS headers on purpose: the only browser client is this same-origin UI.
   app.use(express.static(PUBLIC_DIR));

@@ -148,6 +148,9 @@ caught that it contradicted this rule, and it was changed.
   browser and not just by convention.
 - Cache-Control no-store on `/api` and `/mcp`: investigation data should not
   sit in a browser's disk cache.
+- Cross-Origin-Opener-Policy and Cross-Origin-Resource-Policy same-origin: a
+  source site opened from here gets no handle on this window, and no other
+  site can load this tool's files or answers into its own pages.
 
 ## 18. Case counts exclude re-imports
 
@@ -228,12 +231,12 @@ tool-list pagination, output schemas, and CORS (so a browser client on another
 origin cannot call the endpoint). The argument checker handles only what the
 three tools use; it is not a general JSON Schema validator.
 
-## 25. UI: three static files, no framework, no build step
+## 25. UI: static files, no framework, no build step
 
-`index.html`, `app.js`, `styles.css`, served by the same Express app. The task
-says the interface must be usable and correct, not pretty. One search box, two
-filters, a list and a detail panel do not need a framework, and with no build
-step what is in the repository is what runs in the browser.
+`index.html`, `app.js`, `styles.css` and an icon, served by the same Express
+app. A search box, a few filters, a list and a detail panel do not need a
+framework, and with no build step what is in the repository is what runs in
+the browser.
 
 ## 26. Untrusted text is only ever set as text
 
@@ -333,13 +336,17 @@ languages, and one query finds only the records written in its own language. Fix
 for Estonian and a translation step or a bilingual word list, which I judged
 out of scope.
 
-## 35. Tests cover the logic, not the wiring
+## 35. Tests cover the logic and the wiring, not the UI
 
 `npm test` covers the normaliser, the store, the search, the MCP rules and the
-tool handlers. The HTTP routes and the MCP router are exercised by
-`scripts/mcp-check.sh` against a running server, not by the unit tests, and the
-UI has no automated tests in the repository. The real-client test in decision
-20 was run by hand and is not part of the repository.
+tool handlers. It also mounts each router, and the whole app, on a port of its
+own and calls it with fetch, so the validation rules, the order of the MCP
+checks, the security headers and the Host check are tested over HTTP.
+`scripts/mcp-check.sh` repeats the MCP rules with curl against a running
+server, from outside the process.
+
+The UI has no automated tests in the repository. The real-client test in
+decision 20 was run by hand and is not part of the repository.
 
 ## 36. Filters show their counts
 
@@ -352,3 +359,20 @@ them.
 
 Cost: every search counts all matches for both lists, which is one extra pass
 that is negligible at this size.
+
+## 37. The UI is built for reading and citing, in one light scheme
+
+The task asks for usable and correct, not pretty, so every addition has to
+help an analyst read or cite a finding:
+
+- The whole page works from the keyboard: `/` for the search field, arrows or
+  `j` and `k` through the list, Enter to open, Esc to close.
+- Values an analyst cites (entity, id, key, source) are monospaced and have a
+  copy button that puts the exact text on the clipboard.
+- A match is underlined as well as coloured, and a pressed filter has a
+  doubled edge, so no state rests on colour alone.
+- The only motion is opening and closing a record, and it is off when the
+  system asks for reduced motion.
+
+One light colour scheme, not one that follows the system: a single palette to
+check for contrast. Cost: an analyst who works in the dark gets a light page.

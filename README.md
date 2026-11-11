@@ -44,7 +44,7 @@ npm start
 ## Check it
 
 ```bash
-npm test                 # unit tests
+npm test                 # unit tests, and the whole app over HTTP
 npm run typecheck        # tsc, no output
 node scripts/explore.ts  # the data-quality report this README quotes
 ```
