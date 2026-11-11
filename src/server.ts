@@ -1,18 +1,24 @@
 // The entry point: load the data once, build the Express app, listen.
-// Run with: npm start (PORT, HOST and FINDINGS_PATH are optional environment variables).
+// Run with: npm start (PORT, HOST, FINDINGS_PATH and MCP_ALLOWED_ORIGINS are optional
+// environment variables).
 
 import express from "express";
-import type { RequestHandler } from "express";
+import type { ErrorRequestHandler, RequestHandler } from "express";
 import { loadFindings } from "./data/load.ts";
 import type { Finding } from "./data/normalise.ts";
 import { createStore } from "./data/store.ts";
 import { createApiRouter } from "./http/api.ts";
+import { parseAllowedOrigins } from "./mcp/protocol.ts";
+import { createMcpRouter } from "./mcp/router.ts";
 import { createSearch } from "./search/search.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
 // Loopback by default, so a plain `npm start` is not reachable from the network.
 // The container sets HOST=0.0.0.0, where the published port decides who can connect.
 const HOST = process.env.HOST ?? "127.0.0.1";
+// Web origins that may call /mcp from a browser, besides pages served from this machine.
+// Exact origins separated by commas, e.g. MCP_ALLOWED_ORIGINS=https://tools.example
+const MCP_ALLOWED_ORIGINS = parseAllowedOrigins(process.env.MCP_ALLOWED_ORIGINS);
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
@@ -49,6 +55,20 @@ function loadOrExit(): Finding[] {
   }
 }
 
+// Reached only when nothing mounted below answered. Without it Express would send its
+// own HTML "Cannot GET /path" page, which repeats the requested path.
+const handleNotFound: RequestHandler = (_request, response) => {
+  response.status(404).json({ error: "Not found" });
+};
+
+// The last resort for an error no router handled. Four parameters mark this as an error
+// handler for Express, so `next` stays. The details go to the log; the client gets a
+// fixed message and never a stack trace.
+const handleError: ErrorRequestHandler = (error, _request, response, _next) => {
+  console.error(error);
+  response.status(500).json({ error: "Internal error" });
+};
+
 const findings = loadOrExit();
 const store = createStore(findings);
 const search = createSearch(findings);
@@ -58,8 +78,13 @@ const app = express();
 app.disable("x-powered-by");
 app.use(setSecurityHeaders);
 app.use("/api", createApiRouter(store, search));
-// Later steps mount here, on the same app, store and search: the MCP endpoint at /mcp
-// and the static UI. No CORS headers on purpose: the only client is the same-origin UI.
+// The same store and search as the API, so the two interfaces cannot disagree.
+app.use("/mcp", createMcpRouter(store, search, MCP_ALLOWED_ORIGINS));
+// A later step mounts the static UI here: after the routers above and before the two
+// handlers below, which must stay last. No CORS headers on purpose: the only browser
+// client is the same-origin UI.
+app.use(handleNotFound);
+app.use(handleError);
 
 app.listen(PORT, HOST, (error) => {
   if (error !== undefined) {

@@ -139,3 +139,57 @@ finding with two cases counts in both.
 The task does not ask for it. The server listens on 127.0.0.1 by default and
 the compose file publishes the port on 127.0.0.1 only. A real deployment of an
 investigation tool would need authentication and an access log.
+
+## 20. MCP endpoint is hand-rolled, not the SDK
+
+Spiked both first: the official SDK (v2) behind Express, and a plain Express
+handler, and sent the same ~70 curl requests to each.
+
+The SDK gets the core rules right, but it brings behaviour that cannot be
+switched off and that I would have to defend: it always serves
+`subscriptions/listen` over SSE, it uses error code -32000 where the spec says
+new implementations should not, and by default it still answers the old
+`initialize` handshake. It also adds nine packages.
+
+The task asks for revision 2026-07-28 and three read-only tools. That is three
+methods and one chain of checks, so I wrote it by hand. Each rule in the code
+names the spec page and phrase it implements.
+
+Cost: conformance is on me. `scripts/mcp-check.sh` runs 98 checks against a
+running server. Nothing was tested with a real MCP client, only curl.
+
+## 21. Order of the MCP checks
+
+The spec defines no order, so it is fixed in one place (`src/mcp/router.ts`):
+Origin, HTTP method, content type, body, JSON-RPC shape, notification,
+required headers, protocol version, header/body agreement, `_meta`, method,
+tool name, arguments.
+
+## 22. Choices where the MCP spec is silent
+
+- Unknown tool: HTTP 400 with -32602. The spec gives the code, not the status.
+- Old-style `initialize` without the new headers: -32020, with the supported
+  version named in the message.
+- 403, 405, 413 and 415 carry -32600, never the -32000 range.
+- Bad argument values and "nothing found" are tool results with
+  `isError: true`, not protocol errors.
+- Allowed Origins: none, localhost, 127.0.0.1 and [::1] on any port, plus
+  exact origins listed in `MCP_ALLOWED_ORIGINS`.
+
+## 23. Prompt injection: findings are data, and say so
+
+Some notes in the dataset are written as instructions to an AI assistant; one
+tells it to call `list_cases`. Every tool description says that entity, notes,
+source URL and the raw record are untrusted third-party text. Every result
+repeats that in a `notice` field, so the warning travels with the data. Results
+are built from a fixed list of fields.
+
+This lowers the risk. It does not remove it: the model on the other side
+decides what to do with the text.
+
+## 24. Not in the MCP endpoint
+
+Authentication, rate limiting, SSE, subscriptions, tool-list pagination, output
+schemas, CORS (so a browser client on another origin cannot call it). The
+argument checker handles only what the three tools use; it is not a general
+JSON Schema validator.
